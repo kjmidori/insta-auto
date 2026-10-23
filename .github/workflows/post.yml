@@ -1,29 +1,67 @@
-name: Instagramトークン自動延長
+name: Instagram自動投稿
 
 on:
   schedule:
-    - cron: "13 0 * * 1"   # 毎週月曜 9:13 JST
-  workflow_dispatch:
+    - cron: "57 9 * * *"   # 毎日 18:57 JST（UTC表記。時刻はここで変更）
+  workflow_dispatch:         # 手動実行ボタン
+    inputs:
+      dry_run:
+        description: "投稿せずキャプションだけ確認する"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: instagram-post
+  cancel-in-progress: false
 
 jobs:
-  refresh:
+  post:
     runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+      NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
+          cache: pip
 
-      - name: トークン延長
-        id: r
-        env:
-          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-          FB_APP_ID: ${{ secrets.FB_APP_ID }}
-          FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
-        run: python main.py refresh-token
+      - run: pip install -r requirements.txt pillow-heif
 
-      - name: Secretを新しいトークンで更新
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: gh secret set IG_ACCESS_TOKEN --body "${{ steps.r.outputs.token }}" --repo "${{ github.repository }}"
+      - name: git設定
+        run: |
+          git config user.name "insta-bot"
+          git config user.email "insta-bot@users.noreply.github.com"
+
+      - name: 画像を整形して公開URLを用意
+        run: |
+          python main.py prepare
+          if [ -n "$(git status --porcelain public/)" ]; then
+            git add public/
+            git commit -m "prepare: 投稿画像"
+            git push
+            sleep 10
+          fi
+
+      - name: キャプション生成・投稿
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            python main.py publish --dry-run
+          else
+            python main.py publish
+          fi
+
+      - name: 投稿済みファイルを記録
+        if: always()
+        run: |
+          git add -A queue/ posted/ public/ posted_log.csv || true
+          git commit -m "posted: $(date +%F)" || echo "変更なし"
+          git push || true
