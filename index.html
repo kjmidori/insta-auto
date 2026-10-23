@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>投稿デスク</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<style>
+/* Layout: one narrow work column; queue cards stack in posting order, the next post is marked with a honey stripe */
+:root{
+  --bg:#f3f5f1; --surface:#ffffff; --line:#d9ded6; --fg:#1c221d; --muted:#5f6b62;
+  --accent:#36643f; --accent-fg:#ffffff; --honey:#b77a12; --honey-bg:#fbf1dc;
+  --danger:#b3361f; --ok:#2f7a45;
+  --f-body:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:10px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#131714; --surface:#1b201c; --line:#2e3630; --fg:#e6ebe6; --muted:#9aa69d;
+  --accent:#7fb48a; --accent-fg:#0f1510; --honey:#e2a83d; --honey-bg:#2c2416;
+  --danger:#ef7f68; --ok:#7fc795; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#131714; --surface:#1b201c; --line:#2e3630; --fg:#e6ebe6; --muted:#9aa69d;
+  --accent:#7fb48a; --accent-fg:#0f1510; --honey:#e2a83d; --honey-bg:#2c2416;
+  --danger:#ef7f68; --ok:#7fc795; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.7 var(--f-body);
+  padding:env(safe-area-inset-top,0px) 0 calc(env(safe-area-inset-bottom,0px) + 40px)}
+.wrap{max-width:720px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 16px;padding-block:20px 8px}
+h1{font-size:1.35rem;margin:0;letter-spacing:.02em}
+.acct{font-family:var(--f-mono);font-size:.8rem;color:var(--muted)}
+nav{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-weight:500;padding:10px 12px;cursor:pointer;white-space:nowrap}
+nav button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+button,.btn{font:inherit;font-size:.9rem;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:7px 14px;cursor:pointer;line-height:1.4}
+button:hover{border-color:var(--muted)}
+button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:700}
+button.danger{color:var(--danger)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.summary{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;margin-bottom:16px}
+.summary b{font-family:var(--f-mono);font-weight:500}
+.banner{border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.9rem;background:var(--honey-bg);color:var(--fg);border:1px solid var(--honey)}
+.banner.err{border-color:var(--danger)}
+.banner.ok{border-color:var(--ok)}
+.list{display:flex;flex-direction:column;gap:14px}
+.card{display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;position:relative}
+.card.next{border-left:4px solid var(--honey)}
+.thumb{width:132px;aspect-ratio:4/5;object-fit:cover;border-radius:6px;background:var(--line);max-width:100%}
+.meta{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin-bottom:6px}
+.pos{font-family:var(--f-mono);font-size:.85rem;color:var(--muted)}
+.pill{font-size:.75rem;padding:1px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.pill.next{border-color:var(--honey);color:var(--honey);font-weight:700}
+.pill.has{border-color:var(--ok);color:var(--ok)}
+.fname{font-family:var(--f-mono);font-size:.72rem;color:var(--muted);word-break:break-all}
+label{display:block;font-size:.78rem;color:var(--muted);letter-spacing:.04em;margin:8px 0 2px}
+textarea,input[type=text],input[type=password],input[type=number]{width:100%;font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+textarea{resize:vertical}
+.cap{min-height:9em}
+.actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.confirm{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:.85rem;color:var(--danger)}
+.drop{border:2px dashed var(--line);border-radius:var(--r);padding:28px 16px;text-align:center;color:var(--muted);background:var(--surface)}
+.drop.over{border-color:var(--accent)}
+.newgrid{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.empty{color:var(--muted);text-align:center;padding:32px 8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.hist{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.hist img{width:64px;height:64px;object-fit:cover;border-radius:6px;background:var(--line)}
+.hist time{font-family:var(--f-mono);font-size:.78rem;color:var(--muted)}
+.setup{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.setup ol{padding-left:1.3em;margin:8px 0 14px}
+.setup code,.mono{font-family:var(--f-mono);font-size:.85em}
+.small{font-size:.82rem;color:var(--muted)}
+a{color:var(--accent)}
+@media (max-width:520px){
+  .card{grid-template-columns:1fr}
+  .thumb{width:100%;max-height:340px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>投稿デスク</h1>
+    <span class="acct" id="acct">Instagram 自動投稿 · kjmidori/insta-auto</span>
+  </header>
+
+  <section id="setup" class="setup" hidden>
+    <h2 style="margin:0 0 6px;font-size:1.1rem">最初に、この端末を接続します</h2>
+    <p class="small" style="margin:0">GitHubの「アクセストークン」を1回入れるだけです。トークンはこの端末のブラウザにだけ保存されます。</p>
+    <ol class="small">
+      <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">トークン作成ページ</a>を開く</li>
+      <li>Token name：<code>投稿デスク</code>／Expiration：<code>366 days</code>（最長）</li>
+      <li>Repository access：<b>Only select repositories</b> → <code>insta-auto</code></li>
+      <li>Permissions → Repository permissions：<b>Contents</b> と <b>Actions</b> を <b>Read and write</b></li>
+      <li>「Generate token」→ 表示された <code>github_pat_</code> で始まる文字列を下に貼る</li>
+    </ol>
+    <label for="tokenInput">アクセストークン</label>
+    <input type="password" id="tokenInput" autocomplete="off" placeholder="github_pat_...">
+    <div class="actions"><button class="primary" id="tokenSave">接続する</button></div>
+    <p id="tokenMsg" class="small"></p>
+  </section>
+
+  <main id="app" hidden>
+    <nav role="tablist">
+      <button role="tab" data-tab="queue" aria-selected="true">投稿待ち</button>
+      <button role="tab" data-tab="add" aria-selected="false">写真を追加</button>
+      <button role="tab" data-tab="style" aria-selected="false">文体の設定</button>
+      <button role="tab" data-tab="history" aria-selected="false">投稿履歴</button>
+    </nav>
+    <div id="banner"></div>
+
+    <section data-panel="queue">
+      <div class="summary">
+        <div>次回の自動投稿 <b id="nextTime">—</b><br><span class="small">残り <b id="qCount">0</b> 枚（1日1枚）</span></div>
+        <div class="row">
+          <button id="draftAll">下書きの無い写真をAIで下書き</button>
+          <button id="postNow">今すぐ1枚投稿</button>
+          <button id="reload" aria-label="再読み込み">再読み込み</button>
+        </div>
+      </div>
+      <div id="postNowConfirm" class="banner" hidden>
+        <div class="row" style="justify-content:space-between">
+          <span>一番上の写真を、今すぐInstagramに投稿します。</span>
+          <span class="row"><button class="primary" id="postNowYes">投稿する</button><button id="postNowNo">やめる</button></span>
+        </div>
+      </div>
+      <div id="queueList" class="list"><div class="empty">読み込み中…</div></div>
+      <p class="small" style="margin-top:14px">投稿文が空のまま投稿時刻を迎えた写真は、その時にAIが自動で文章を書いて投稿します。</p>
+    </section>
+
+    <section data-panel="add" hidden>
+      <div class="drop" id="drop">
+        <p style="margin:0 0 10px">写真をここにドラッグ、または</p>
+        <label class="btn" for="fileInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">写真を選ぶ（複数可）</label>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
+      </div>
+      <div id="newList" class="newgrid"></div>
+      <div class="actions" id="uploadBar" hidden>
+        <button class="primary" id="uploadBtn">投稿待ちに追加</button>
+        <label class="row small" style="margin:0;gap:6px"><input type="checkbox" id="autoDraft" checked> 追加後にAIで下書きを作る</label>
+      </div>
+    </section>
+
+    <section data-panel="style" hidden>
+      <p class="small" style="margin-top:0">AIが投稿文を書くときの前提です。保存すると次の下書きから反映されます。</p>
+      <label for="cfgProfile">アカウントの説明（誰が・何を発信するか）</label>
+      <textarea id="cfgProfile" rows="4"></textarea>
+      <label for="cfgTone">文体</label>
+      <textarea id="cfgTone" rows="4"></textarea>
+      <label for="cfgRules">必ず守るルール（1行に1つ）</label>
+      <textarea id="cfgRules" rows="4"></textarea>
+      <label for="cfgTags">毎回つけるハッシュタグ（スペース区切り）</label>
+      <input type="text" id="cfgTags">
+      <label for="cfgMax">最大文字数</label>
+      <input type="number" id="cfgMax" min="50" max="2200" step="50" style="max-width:10em">
+      <div class="actions"><button class="primary" id="cfgSave">設定を保存</button></div>
+    </section>
+
+    <section data-panel="history" hidden>
+      <div id="histList"><div class="empty">読み込み中…</div></div>
+    </section>
+
+    <p class="small" style="margin-top:28px"><button id="logout" style="font-size:.8rem">この端末の接続を解除</button></p>
+  </main>
+</div>
+
+<script>
+const OWNER="kjmidori", REPO="insta-auto", BR="main";
+const API=`https://api.github.com/repos/${OWNER}/${REPO}`;
+const RAW=`https://raw.githubusercontent.com/${OWNER}/${REPO}/${BR}/`;
+const IMG=/\.(jpe?g|png|webp|heic)$/i;
+const $=s=>document.querySelector(s);
+let TOKEN=""; try{TOKEN=localStorage.getItem("ghToken")||""}catch(e){}
+let items=[]; const localPreview={}; let busy=false;
+
+/* ---------- GitHub API ---------- */
+async function gh(path,opt={}){
+  const r=await fetch(path.startsWith("http")?path:API+path,{...opt,headers:{
+    "Authorization":"Bearer "+TOKEN,"Accept":"application/vnd.github+json",
+    "X-GitHub-Api-Version":"2022-11-28",...(opt.body?{"Content-Type":"application/json"}:{})}});
+  if(r.status===404&&opt.allow404) return null;
+  if(!r.ok){let m="";try{m=(await r.json()).message}catch(e){} const err=new Error(m||r.statusText);err.status=r.status;throw err}
+  return r.status===204?null:r.json();
+}
+const b64ToText=b=>new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g,"")),c=>c.charCodeAt(0)));
+function bytesToB64(u8){let s="";for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));return btoa(s)}
+const textToB64=t=>bytesToB64(new TextEncoder().encode(t));
+async function readText(path){const d=await gh("/contents/"+encodeURI(path)+"?ref="+BR,{allow404:true});return d?b64ToText(d.content):null}
+
+/* changes: {path: base64 | null(delete)} → 1 commit */
+async function commit(changes,message,retry=true){
+  try{
+    const ref=await gh("/git/ref/heads/"+BR);
+    const base=await gh("/git/commits/"+ref.object.sha);
+    const tree=[];
+    for(const [path,b64] of Object.entries(changes)){
+      if(b64===null){tree.push({path,mode:"100644",type:"blob",sha:null});continue}
+      const blob=await gh("/git/blobs",{method:"POST",body:JSON.stringify({content:b64,encoding:"base64"})});
+      tree.push({path,mode:"100644",type:"blob",sha:blob.sha});
+    }
+    const t=await gh("/git/trees",{method:"POST",body:JSON.stringify({base_tree:base.tree.sha,tree})});
+    const c=await gh("/git/commits",{method:"POST",body:JSON.stringify({message,tree:t.sha,parents:[ref.object.sha]})});
+    await gh("/git/refs/heads/"+BR,{method:"PATCH",body:JSON.stringify({sha:c.sha})});
+  }catch(e){ if(retry&&(e.status===422||e.status===409)) return commit(changes,message,false); throw e }
+}
+
+/* ---------- UI helpers ---------- */
+function banner(msg,kind=""){const b=$("#banner");b.innerHTML="";if(!msg)return;const d=document.createElement("div");d.className="banner "+kind;d.textContent=msg;b.append(d)}
+function errText(e){
+  if(e.status===401) return "トークンが無効か期限切れです。下の「接続を解除」から入れ直してください。";
+  if(e.status===403) return "権限が足りません。トークンの Contents と Actions が Read and write か確認してください。";
+  return "うまくいきませんでした："+e.message+"。少し待って再読み込みしてください。";
+}
+async function guard(fn){if(busy)return;busy=true;document.body.style.cursor="progress";
+  try{await fn()}catch(e){console.error(e);banner(errText(e),"err")}finally{busy=false;document.body.style.cursor=""}}
+function nextRun(){ // 毎日 18:57 JST
+  const now=new Date(), jst=new Date(now.getTime()+9*3600e3);
+  const t=new Date(Date.UTC(jst.getUTCFullYear(),jst.getUTCMonth(),jst.getUTCDate(),18,57)-9*3600e3);
+  if(t<=now) t.setUTCDate(t.getUTCDate()+1);
+  return t.toLocaleString("ja-JP",{timeZone:"Asia/Tokyo",month:"numeric",day:"numeric",weekday:"short",hour:"2-digit",minute:"2-digit"});
+}
+const stemOf=n=>n.replace(/\.[^.]+$/,"");
+
+/* ---------- Queue ---------- */
+async function loadQueue(){
+  const list=await gh("/contents/queue?ref="+BR,{allow404:true})||[];
+  const files=Object.fromEntries(list.map(f=>[f.name,f]));
+  const imgs=list.filter(f=>IMG.test(f.name)).map(f=>f.name);
+  const orderTxt=files["order.txt"]?await readText("queue/order.txt"):"";
+  const order=(orderTxt||"").split("\n").map(s=>s.trim()).filter(n=>imgs.includes(n));
+  const names=[...new Set([...order,...imgs.sort()])];
+  items=await Promise.all(names.map(async n=>{
+    const s=stemOf(n), mf=s+".txt", cf=s+".caption.txt";
+    let memo=files[mf]?await readText("queue/"+mf):"", caption=files[cf]?await readText("queue/"+cf):"";
+    if(!caption&&memo.trimStart().startsWith("caption:")){caption=memo.trimStart().slice(8).trim();memo=""}
+    return {name:n,stem:s,memo:(memo||"").trim(),caption:(caption||"").trim(),src:localPreview[n]||files[n].download_url+"?v="+files[n].sha.slice(0,7),
+      hasMemo:!!files[mf],hasCap:!!files[cf]};
+  }));
+  renderQueue();
+}
+function renderQueue(){
+  $("#qCount").textContent=items.length; $("#nextTime").textContent=nextRun();
+  const box=$("#queueList"); box.innerHTML="";
+  if(!items.length){box.innerHTML='<div class="empty">投稿待ちの写真はありません。<br>「写真を追加」から入れてください。</div>';return}
+  items.forEach((it,i)=>{
+    const c=document.createElement("article"); c.className="card"+(i===0?" next":"");
+    c.innerHTML=`<img class="thumb" alt="" loading="lazy">
+    <div style="min-width:0">
+      <div class="meta"><span class="pos">#${i+1}</span>
+        ${i===0?'<span class="pill next">次回投稿</span>':""}
+        <span class="pill ${it.caption?"has":""}">${it.caption?"投稿文あり":"投稿文なし（投稿時にAIが作成）"}</span></div>
+      <div class="fname"></div>
+      <label for="m-${i}">メモ（AIに伝える事実）</label>
+      <textarea id="m-${i}" rows="2" placeholder="例：群馬の巣箱。今朝は出入りが活発"></textarea>
+      <label for="c-${i}">投稿文（この内容がそのまま投稿されます）</label>
+      <textarea id="c-${i}" class="cap" placeholder="空欄なら投稿時にAIが書きます"></textarea>
+      <div class="actions">
+        <button class="primary" data-act="save">保存</button>
+        <button data-act="redraft">AIで書き直す</button>
+        <button data-act="up" ${i===0?"disabled":""} aria-label="順番を上へ">↑</button>
+        <button data-act="down" ${i===items.length-1?"disabled":""} aria-label="順番を下へ">↓</button>
+        <button class="danger" data-act="del">削除</button>
+      </div>
+      <div class="confirm" hidden>この写真を投稿待ちから削除しますか？
+        <button class="danger" data-act="delYes">削除する</button><button data-act="delNo">やめる</button></div>
+    </div>`;
+    c.querySelector(".thumb").src=it.src;
+    c.querySelector(".fname").textContent=it.name;
+    c.querySelector("textarea[id^=m-]").value=it.memo;
+    c.querySelector("textarea[id^=c-]").value=it.caption;
+    c.addEventListener("click",e=>{const a=e.target.dataset.act;if(a)onAct(a,i,c)});
+    box.append(c);
+  });
+}
+function orderB64(names){return textToB64(names.join("\n")+"\n")}
+async function onAct(a,i,card){
+  const it=items[i];
+  if(a==="del"){card.querySelector(".confirm").hidden=false;return}
+  if(a==="delNo"){card.querySelector(".confirm").hidden=true;return}
+  guard(async()=>{
+    if(a==="save"){
+      const memo=card.querySelector("textarea[id^=m-]").value.trim();
+      const cap=card.querySelector("textarea[id^=c-]").value.trim();
+      const ch={};
+      if(memo) ch["queue/"+it.stem+".txt"]=textToB64(memo+"\n"); else if(it.hasMemo) ch["queue/"+it.stem+".txt"]=null;
+      if(cap) ch["queue/"+it.stem+".caption.txt"]=textToB64(cap+"\n"); else if(it.hasCap) ch["queue/"+it.stem+".caption.txt"]=null;
+      if(!Object.keys(ch).length){banner("変更はありません");return}
+      banner("保存しています…"); await commit(ch,"edit: "+it.name); banner("保存しました","ok"); await loadQueue();
+    }
+    if(a==="up"||a==="down"){
+      const n=items.map(x=>x.name), j=a==="up"?i-1:i+1; [n[i],n[j]]=[n[j],n[i]];
+      banner("順番を変更しています…"); await commit({"queue/order.txt":orderB64(n)},"reorder"); banner("順番を変更しました","ok"); await loadQueue();
+    }
+    if(a==="delYes"){
+      const ch={["queue/"+it.name]:null};
+      if(it.hasMemo) ch["queue/"+it.stem+".txt"]=null; if(it.hasCap) ch["queue/"+it.stem+".caption.txt"]=null;
+      ch["queue/order.txt"]=orderB64(items.filter(x=>x!==it).map(x=>x.name));
+      banner("削除しています…"); await commit(ch,"delete: "+it.name); banner("削除しました","ok"); await loadQueue();
+    }
+    if(a==="redraft"){
+      const memo=card.querySelector("textarea[id^=m-]").value.trim();
+      if(memo!==it.memo){ const ch={}; ch["queue/"+it.stem+".txt"]=memo?textToB64(memo+"\n"):(it.hasMemo?null:undefined);
+        if(ch["queue/"+it.stem+".txt"]!==undefined) await commit(ch,"memo: "+it.name) }
+      await runWorkflow("draft.yml",{only:it.name,force:"true"},"AIが投稿文を書き直しています（30秒〜1分）…");
+    }
+  });
+}
+
+/* ---------- Workflows ---------- */
+async function runWorkflow(file,inputs,waitMsg){
+  const since=Date.now()-5000;
+  banner(waitMsg);
+  await gh(`/actions/workflows/${file}/dispatches`,{method:"POST",body:JSON.stringify({ref:BR,inputs})});
+  let run=null;
+  for(let k=0;k<60;k++){ // 最大約5分
+    await new Promise(r=>setTimeout(r,5000));
+    const d=await gh(`/actions/workflows/${file}/runs?per_page=3&event=workflow_dispatch`);
+    run=(d.workflow_runs||[]).find(r=>new Date(r.created_at).getTime()>=since)||null;
+    if(run&&run.status==="completed") break;
+  }
+  if(!run||run.status!=="completed"){banner("処理に時間がかかっています。数分後に「再読み込み」を押してください。");return}
+  if(run.conclusion==="success") banner("完了しました","ok");
+  else banner("処理が失敗しました。GitHubのActions画面で詳細を確認できます："+run.html_url,"err");
+  await loadQueue(); if(file==="post.yml") loadHistory();
+}
+$("#draftAll").onclick=()=>guard(()=>runWorkflow("draft.yml",{only:"",force:"false"},"AIが下書きを作っています（1枚30秒ほど）…"));
+$("#postNow").onclick=()=>{$("#postNowConfirm").hidden=false};
+$("#postNowNo").onclick=()=>{$("#postNowConfirm").hidden=true};
+$("#postNowYes").onclick=()=>{$("#postNowConfirm").hidden=true;guard(()=>runWorkflow("post.yml",{dry_run:"false"},"Instagramに投稿しています（1分ほど）…"))};
+$("#reload").onclick=()=>guard(async()=>{banner("");await loadQueue()});
+
+/* ---------- Add photos ---------- */
+let pending=[];
+async function shrink(file){
+  try{
+    const bmp=await createImageBitmap(file,{imageOrientation:"from-image"});
+    const s=Math.min(1,2048/Math.max(bmp.width,bmp.height));
+    const cv=document.createElement("canvas"); cv.width=Math.round(bmp.width*s); cv.height=Math.round(bmp.height*s);
+    cv.getContext("2d").drawImage(bmp,0,0,cv.width,cv.height);
+    const blob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.9));
+    return {blob,ext:"jpg"};
+  }catch(e){ return {blob:file,ext:(file.name.split(".").pop()||"jpg").toLowerCase()} }
+}
+function addFiles(fl){
+  [...fl].filter(f=>f.type.startsWith("image/")||IMG.test(f.name)).forEach(f=>{
+    const p={file:f,url:URL.createObjectURL(f),memo:""}; pending.push(p);
+  });
+  renderPending();
+}
+function renderPending(){
+  const box=$("#newList"); box.innerHTML="";
+  pending.forEach((p,i)=>{
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`<img class="thumb" alt=""><div style="min-width:0"><div class="fname"></div>
+      <label for="nm-${i}">メモ（任意）</label><textarea id="nm-${i}" rows="3" placeholder="例：群馬の巣箱。10月下旬、気温が下がっても出入りが続いている"></textarea>
+      <div class="actions"><button class="danger" data-i="${i}">外す</button></div></div>`;
+    c.querySelector("img").src=p.url; c.querySelector(".fname").textContent=p.file.name;
+    const ta=c.querySelector("textarea"); ta.value=p.memo; ta.oninput=()=>p.memo=ta.value;
+    c.querySelector("button").onclick=()=>{pending.splice(i,1);renderPending()};
+    box.append(c);
+  });
+  $("#uploadBar").hidden=!pending.length;
+}
+$("#fileInput").onchange=e=>{addFiles(e.target.files);e.target.value=""};
+const drop=$("#drop");
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("over")};
+drop.ondragleave=()=>drop.classList.remove("over");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");addFiles(e.dataTransfer.files)};
+$("#uploadBtn").onclick=()=>guard(async()=>{
+  banner(`${pending.length}枚を追加しています…`);
+  const d=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
+  const ch={}, names=[];
+  for(let i=0;i<pending.length;i++){
+    const p=pending[i], {blob,ext}=await shrink(p.file);
+    const name=`${d.slice(0,8)}_${d.slice(8)}_${String(i+1).padStart(2,"0")}.${ext}`;
+    ch["queue/"+name]=bytesToB64(new Uint8Array(await blob.arrayBuffer()));
+    if(p.memo.trim()) ch["queue/"+stemOf(name)+".txt"]=textToB64(p.memo.trim()+"\n");
+    localPreview[name]=p.url; names.push(name);
+  }
+  ch["queue/order.txt"]=orderB64([...items.map(x=>x.name),...names]);
+  await commit(ch,`add: ${names.length}枚`);
+  pending=[]; renderPending(); await loadQueue(); showTab("queue");
+  if($("#autoDraft").checked) await runWorkflow("draft.yml",{only:"",force:"false"},`${names.length}枚を追加しました。AIが下書きを作っています（1枚30秒ほど）…`);
+  else banner(`${names.length}枚を追加しました`,"ok");
+});
+
+/* ---------- Style (config.yaml) ---------- */
+let cfg=null;
+async function loadConfig(){
+  cfg=jsyaml.load(await readText("config.yaml"))||{};
+  $("#cfgProfile").value=(cfg.account_profile||"").trim();
+  $("#cfgTone").value=(cfg.tone||"").trim();
+  $("#cfgRules").value=(cfg.rules||[]).join("\n");
+  $("#cfgTags").value=(cfg.fixed_hashtags||[]).join(" ");
+  $("#cfgMax").value=cfg.max_caption_chars||600;
+}
+$("#cfgSave").onclick=()=>guard(async()=>{
+  cfg.account_profile=$("#cfgProfile").value.trim()+"\n";
+  cfg.tone=$("#cfgTone").value.trim()+"\n";
+  cfg.rules=$("#cfgRules").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  cfg.fixed_hashtags=$("#cfgTags").value.split(/\s+/).filter(Boolean).map(t=>t.startsWith("#")?t:"#"+t);
+  cfg.max_caption_chars=Math.min(2200,Math.max(50,parseInt($("#cfgMax").value)||600));
+  banner("保存しています…");
+  await commit({"config.yaml":textToB64("# 投稿デスクから編集\n"+jsyaml.dump(cfg,{lineWidth:-1}))},"config: 文体の設定");
+  banner("設定を保存しました。次の下書きから反映されます","ok");
+});
+
+/* ---------- History ---------- */
+async function loadHistory(){
+  const csv=await readText("posted_log.csv")||"";
+  const rows=csv.trim().split("\n").slice(1).filter(Boolean).map(l=>{
+    const m=l.match(/^([^,]*),([^,]*),([^,]*),(.*)$/); return m?{at:m[1],file:m[2],cap:m[4].replace(/^"|"$/g,"")}:null}).filter(Boolean).reverse();
+  const box=$("#histList"); box.innerHTML="";
+  if(!rows.length){box.innerHTML='<div class="empty">まだ投稿はありません。</div>';return}
+  rows.slice(0,30).forEach(r=>{
+    const d=document.createElement("div"); d.className="hist";
+    d.innerHTML=`<img alt="" loading="lazy"><div style="min-width:0"><time></time><div></div></div>`;
+    d.querySelector("img").src=RAW+"posted/"+encodeURIComponent(r.file);
+    d.querySelector("time").textContent=r.at.replace("T"," ").slice(0,16);
+    d.querySelector("div div").textContent=r.cap+"…";
+    box.append(d);
+  });
+}
+
+/* ---------- Tabs & start ---------- */
+function showTab(t){
+  document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===t));
+  document.querySelectorAll("[data-panel]").forEach(p=>p.hidden=p.dataset.panel!==t);
+  if(t==="style"&&!cfg) guard(loadConfig);
+  if(t==="history") guard(loadHistory);
+}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+$("#tokenSave").onclick=async()=>{
+  TOKEN=$("#tokenInput").value.trim(); $("#tokenMsg").textContent="確認しています…";
+  try{await gh("/contents/config.yaml?ref="+BR);try{localStorage.setItem("ghToken",TOKEN)}catch(e){} start()}
+  catch(e){$("#tokenMsg").textContent=errText(e)}
+};
+$("#logout").onclick=()=>{try{localStorage.removeItem("ghToken")}catch(e){} location.reload()};
+function start(){$("#setup").hidden=true;$("#app").hidden=false;guard(loadQueue)}
+if(TOKEN) start(); else $("#setup").hidden=false;
+</script>
+</body>
+</html>

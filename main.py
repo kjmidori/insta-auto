@@ -6,12 +6,16 @@ Instagram 自動投稿プログラム
   python main.py prepare            # 次に投稿する画像をInstagram用に整形 → public/ に出力
   python main.py publish            # キャプション生成 → Instagramへ投稿
   python main.py publish --dry-run  # 投稿せずキャプションだけ確認
+  python main.py draft              # queue内の全写真のAI下書きを作成（〇〇.caption.txt）
+  python main.py draft --only X.jpg --force  # 指定写真の下書きを作り直す
   python main.py refresh-token      # アクセストークンを延長（60日→再延長）
 
 queue/ フォルダの仕組み:
   queue/20261101_hive.jpg   ← 写真（ファイル名順に投稿）
   queue/20261101_hive.txt   ← メモ（任意。AIがこれを元にキャプションを書く）
-  メモの1行目が「caption:」で始まる場合は、AIを使わずその文章をそのまま投稿
+  queue/20261101_hive.caption.txt ← 投稿文（あればAIを使わずこの文章をそのまま投稿）
+  queue/order.txt           ← 投稿順（1行1ファイル名。無いものはファイル名順で後ろ）
+  メモの1行目が「caption:」で始まる場合も、その文章をそのまま投稿
 """
 import argparse
 import base64
@@ -50,15 +54,37 @@ def env(name, required=True):
     return v
 
 
-def next_item():
-    """queue/ の中でファイル名が最も若い画像と、そのメモを返す"""
+def queue_images():
+    """投稿順に並べた queue/ 内の画像一覧（order.txt 優先、残りはファイル名順）"""
     if not QUEUE.exists():
-        return None, None
-    images = sorted(p for p in QUEUE.iterdir() if p.suffix.lower() in IMG_EXT)
+        return []
+    images = {p.name: p for p in QUEUE.iterdir() if p.suffix.lower() in IMG_EXT}
+    ordered = []
+    order_file = QUEUE / "order.txt"
+    if order_file.exists():
+        for line in order_file.read_text(encoding="utf-8").splitlines():
+            name = line.strip()
+            if name in images and images[name] not in ordered:
+                ordered.append(images[name])
+    ordered += [images[n] for n in sorted(images) if images[n] not in ordered]
+    return ordered
+
+
+def memo_path(img: Path) -> Path:
+    return img.with_suffix(".txt")
+
+
+def caption_path(img: Path) -> Path:
+    return img.with_name(img.stem + ".caption.txt")
+
+
+def next_item():
+    """次に投稿する画像と、そのメモを返す"""
+    images = queue_images()
     if not images:
         return None, None
     img = images[0]
-    memo = img.with_suffix(".txt")
+    memo = memo_path(img)
     return img, (memo if memo.exists() else None)
 
 
@@ -236,7 +262,11 @@ def cmd_publish(cfg, dry_run=False):
         fit_for_instagram(img, prepared)
 
     memo_text = memo.read_text(encoding="utf-8") if memo else ""
-    caption = generate_caption(cfg, prepared, memo_text)
+    cap_file = caption_path(img)
+    if cap_file.exists() and cap_file.read_text(encoding="utf-8").strip():
+        caption = cap_file.read_text(encoding="utf-8").strip()[:2200]
+    else:
+        caption = generate_caption(cfg, prepared, memo_text)
     print("=" * 40)
     print(f"画像: {img.name}")
     print("-" * 40)
@@ -259,12 +289,46 @@ def cmd_publish(cfg, dry_run=False):
     shutil.move(str(img), POSTED / img.name)
     if memo:
         shutil.move(str(memo), POSTED / memo.name)
+    cap_file.unlink(missing_ok=True)
     (POSTED / (img.stem + "_caption.txt")).write_text(caption, encoding="utf-8")
+    order_file = QUEUE / "order.txt"
+    if order_file.exists():
+        rest = [l for l in order_file.read_text(encoding="utf-8").splitlines() if l.strip() and l.strip() != img.name]
+        order_file.write_text("\n".join(rest) + ("\n" if rest else ""), encoding="utf-8")
     prepared.unlink(missing_ok=True)
     STATE.unlink(missing_ok=True)
     write_log(img.name, media_id, caption)
     notify(f"✅ Instagramに投稿しました: {img.name}")
     print(f"投稿完了 media_id={media_id}")
+
+
+def cmd_draft(cfg, only=None, force=False):
+    """queue内の写真にAI下書き（〇〇.caption.txt）を作る"""
+    images = queue_images()
+    if only:
+        images = [p for p in images if p.name == only]
+    if not images:
+        print("下書き対象の写真はありません")
+        return
+    tmp = ROOT / ".draft_tmp"
+    tmp.mkdir(exist_ok=True)
+    made = 0
+    for img in images:
+        cap = caption_path(img)
+        if cap.exists() and not force:
+            continue
+        memo = memo_path(img)
+        memo_text = memo.read_text(encoding="utf-8") if memo.exists() else ""
+        if memo_text.lstrip().startswith("caption:"):
+            text = memo_text.lstrip()[len("caption:"):].strip()
+        else:
+            fitted = fit_for_instagram(img, tmp / (img.stem + ".jpg"))
+            text = generate_caption(cfg, fitted, memo_text)
+        cap.write_text(text + "\n", encoding="utf-8")
+        made += 1
+        print(f"下書き作成: {img.name}")
+    shutil.rmtree(tmp, ignore_errors=True)
+    print(f"{made}件の下書きを作成しました")
 
 
 def cmd_refresh_token(cfg):
@@ -290,14 +354,18 @@ def cmd_refresh_token(cfg):
 
 def main():
     ap = argparse.ArgumentParser(description="Instagram 自動投稿")
-    ap.add_argument("command", choices=["prepare", "publish", "refresh-token"])
+    ap.add_argument("command", choices=["prepare", "publish", "draft", "refresh-token"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", default="")
+    ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
     cfg = load_config()
     if a.command == "prepare":
         cmd_prepare(cfg)
     elif a.command == "publish":
         cmd_publish(cfg, a.dry_run)
+    elif a.command == "draft":
+        cmd_draft(cfg, a.only or None, a.force)
     else:
         cmd_refresh_token(cfg)
 
