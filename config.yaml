@@ -1,0 +1,41 @@
+# ===== Instagram 自動投稿 設定 =====
+
+# アカウントの説明（AIがキャプションを書く時の前提）
+account_profile: |
+  日本ミツバチの蜂蜜ブランド「百花譜」の公式アカウント。
+  群馬の養蜂場で、森と蜂と人の関係を伝える。
+  事業を通じて森林を守ることが根本の目的。
+
+# 文体・トーン
+tone: |
+  落ち着いた丁寧語。誇張・煽り表現は使わない。
+  一次情報（現場で見たこと）を中心に、短い段落で。
+  絵文字は最大2個まで。
+
+# 必ず守るルール（AIへの禁止事項）
+rules:
+  - 効能・健康効果をうたわない（食品表示・薬機法の観点）
+  - メモや写真から読み取れない事実を作らない
+  - 価格・在庫・日付は、メモに書かれている場合のみ記載する
+
+# 毎回つける固定ハッシュタグ（AIが追加で3〜5個選ぶ）
+fixed_hashtags:
+  - "#日本ミツバチ"
+  - "#百花譜"
+
+# キャプションの最大文字数（Instagram上限は2200）
+max_caption_chars: 600
+
+# 使用するAIモデル
+model: claude-sonnet-5-5
+
+# 画像の置き場所
+#   github_raw : 公開GitHubリポジトリのURLを使う（追加契約不要）
+#   imgbb      : imgbb.com にアップロード（リポジトリを非公開にしたい場合）
+image_host: github_raw
+
+# Instagram API の種類
+#   instagram : Instagramログイン方式（graph.instagram.com）推奨
+#   facebook  : Facebookページ連携方式（graph.facebook.com）
+api_type: instagram
+api_version: v21.0
