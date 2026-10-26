@@ -820,9 +820,18 @@ const ILLUST_SYS=`あなたは科学コミュニケーション用のイラス�
 - <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" width="1080" height="700"> で始め、最初に全面の背景の<rect>を置く
 - 使う色はこのパレットのみ：${ILLUST_PALETTE.join(" ")}
 - 平面的な図形（circle, ellipse, rect, path, polygon）で描く。グラデーション・影・フィルター・画像・外部参照・<text>・文字・数字・記号は使わない
-- 主題を1つ大きく、背景に植物・巣箱・空などを控えめに。余白を十分に取る
-- 昆虫を描く場合は、頭・胸・腹の3部分、脚6本は胸から、翅は2対（4枚）。正確さを優先し、誇張した顔や表情は付けない
-- 論文の数値やグラフは描かない（文字は別に載せるため）。話題の雰囲気を象徴的に表す
+- 主題を1つ、背景に植物・巣箱・空などを控えめに。余白を十分に取る
+【ミツバチは用意された部品を使う（自分で描かない）】
+- ミツバチは必ず <use href="#bee" transform="translate(x y) rotate(角度) scale(s)"/> で配置する。部品は右向きの横姿で、幅約200・高さ約140、原点は左上
+- 大きさは scale(0.25〜3)、左向きにしたい時は scale(-s s)。1〜15匹まで。主役として大きく1匹、群れや飛ぶ様子を小さく複数、など構図は自由に工夫してよい
+- 飛ぶ軌跡を点線（stroke-dasharray）で描く、巣箱の入口に集まる、花の周りを飛ぶ、など動きのある楽しい構図にする
+- 部品以外の方法でミツバチや他の昆虫を描かない。#bee の中身を描き直したり <symbol id="bee"> を自分で定義したりしない
+【専門家に指摘されそうな描写は避ける】
+- ミツバチ以外の生き物の大写し・断面図・解剖図・巣の内部構造は描かない
+- 特定の種と分かる花や植物、特定の地形・地図・建物は描かない（一般的な草花、丸い木、なだらかな丘など）
+- 時計の時刻、温度計の目盛り、グラフ、矢印による因果関係など、事実を主張する図は描かない
+- 蜂蜜の瓶や商品を連想させるものは描かない
+- 迷ったら、生き物より風景・季節・光（空、太陽、草原、巣箱の外観、花畑）で話題の雰囲気を表す
 - 全体で12000文字以内
 出力はSVGコードのみ。説明は不要。`;
 async function claudeText(content,system,maxTokens=8000){
@@ -833,12 +842,32 @@ async function claudeText(content,system,maxTokens=8000){
   if(!r.ok){const e=new Error((d.error&&d.error.message)||r.statusText);e.status=r.status;e.ai=true;throw e}
   return (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
 }
+/* 正確なミツバチの部品（横姿・右向き）：体3部分、脚6本（胸から）、翅2対、触角2本 */
+const BEE_DEFS=`<defs><clipPath id="beeAbdClip"><ellipse cx="62" cy="82" rx="50" ry="32"/></clipPath>
+<symbol id="bee" viewBox="0 0 200 140" width="200" height="140" overflow="visible">
+<g stroke="#2a2622" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".45">
+<path d="M113 94 L107 114 L101 131"/><path d="M123 97 L124 119 L120 136"/><path d="M131 93 L142 112 L151 127"/></g>
+<g stroke="#2a2622" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+<path d="M107 92 L98 113 L89 131"/><path d="M118 96 L116 119 L110 137"/><path d="M127 92 L136 112 L144 129"/></g>
+<path d="M14 84 L4 82 L14 79 Z" fill="#2a2622"/>
+<ellipse cx="62" cy="82" rx="50" ry="32" fill="#2a2622"/>
+<g clip-path="url(#beeAbdClip)" fill="#a98a52"><rect x="34" y="40" width="9" height="90"/><rect x="56" y="40" width="9" height="90"/><rect x="78" y="40" width="9" height="90"/></g>
+<circle cx="118" cy="74" r="27" fill="#6b5236"/>
+<ellipse cx="153" cy="80" rx="17" ry="20" fill="#2a2622"/>
+<ellipse cx="158" cy="75" rx="6.5" ry="10.5" fill="#4a4540"/>
+<g stroke="#2a2622" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none">
+<path d="M155 62 L161 45 L177 36"/><path d="M149 62 L150 43 L165 31"/></g>
+<ellipse cx="82" cy="49" rx="30" ry="11" transform="rotate(-8 82 49)" fill="#ffffff" fill-opacity=".72" stroke="#7d8a80" stroke-width="1.6"/>
+<ellipse cx="92" cy="34" rx="47" ry="16" transform="rotate(-14 92 34)" fill="#ffffff" fill-opacity=".78" stroke="#7d8a80" stroke-width="1.6"/>
+</symbol></defs>`;
 function cleanSvg(t){
   const m=t.match(/<svg[\s\S]*<\/svg>/i); if(!m) return null;
   let svg=m[0].replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<text[\s\S]*?<\/text>/gi,"").replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi,"")
     .replace(/<image[^>]*>/gi,"").replace(/\son\w+="[^"]*"/gi,"").replace(/(xlink:)?href="(?!#)[^"]*"/gi,"");
   if(!/xmlns=/.test(svg)) svg=svg.replace(/<svg/i,'<svg xmlns="http://www.w3.org/2000/svg"');
   if(!/\swidth=/.test(svg.slice(0,300))) svg=svg.replace(/<svg/i,'<svg width="1080" height="700"');
+  svg=svg.replace(/<symbol[^>]*id="bee"[\s\S]*?<\/symbol>/gi,"").replace(/<clipPath[^>]*id="beeAbdClip"[\s\S]*?<\/clipPath>/gi,"");
+  svg=svg.replace(/(<svg[^>]*>)/i,"$1"+BEE_DEFS);
   return svg;
 }
 async function makeIllustration(d){
