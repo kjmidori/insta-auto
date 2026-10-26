@@ -183,7 +183,7 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
             <label for="urlInput" style="margin-top:0">論文のページのアドレス（URL）</label>
             <input type="text" id="urlInput" inputmode="url" placeholder="https://pmc.ncbi.nlm.nih.gov/articles/...">
             <div class="actions"><button id="urlBtn">URLから読み込む</button></div>
-            <p class="small" style="margin:4px 0 0">無料公開のページ（PMC、J-STAGEなど）のみ。有料・ログインが必要なページは読めません。</p>
+            <p class="small" style="margin:4px 0 0">無料公開のページ（PMC、J-STAGEなど）のみ。有料・ログインが必要なページや、サイト側が機械の閲覧を止めているページは読めません。その場合はPDFを保存して上に入れてください。</p>
           </div>
           <div>
             <label for="pasteInput" style="margin-top:0">文章を貼り付けて読み込む</label>
@@ -846,7 +846,7 @@ function runIngestJobs(jobs){
     const st=$("#pdfStatus"); let ok=0;
     for(let i=0;i<jobs.length;i++){
       st.textContent=`読み込み中 ${i+1}/${jobs.length}：${jobs[i].label}（30秒〜1分）`;
-      try{await jobs[i].run();ok++}catch(e){console.error(e);banner(jobs[i].label+"："+aiErr(e),"err")}
+      try{await jobs[i].run();ok++}catch(e){console.error(e);banner(jobs[i].label+"："+((e.ai||e.status)?aiErr(e):e.message),"err")}
     }
     st.textContent=""; if(ok) banner(`${ok}本の論文を読み込みました。下で知見を確認してください`,"ok");
     await loadPapers();
@@ -856,7 +856,11 @@ $("#pdfInput").onchange=e=>{ingestFiles(e.target.files);e.target.value=""};
 $("#urlBtn").onclick=()=>{
   const u=$("#urlInput").value.trim();
   if(!/^https?:\/\/\S+$/.test(u)){banner("http から始まるアドレスを入れてください","err");return}
-  runIngestJobs([{label:u,run:async()=>{await ingestBlocks([{type:"text",text:`次のURLの論文ページを web_fetch で読み込んでください：${u}\n本文が取得できない場合（有料・ログイン必須など）は error を返してください。`}],u,
+  // PMCはボット確認で止められるため、同じ論文を機械向けに公開している Europe PMC の全文を先に読む
+  const pmc=(u.match(/PMC\d+/i)||[])[0];
+  const target=pmc?`https://www.ebi.ac.uk/europepmc/webservices/rest/${pmc.toUpperCase()}/fullTextXML`:u;
+  const extra=pmc?`\n（これは ${u} と同じ論文の全文XMLです。取得できない場合は https://europepmc.org/article/PMC/${pmc.toUpperCase()} も試してください）`:"";
+  runIngestJobs([{label:u,run:async()=>{await ingestBlocks([{type:"text",text:`次のURLの論文を web_fetch で読み込んでください：${target}${extra}\n本文が取得できない場合（有料・ログイン必須・ボット確認など）は error を返してください。`}],u,
     {tools:[{type:"web_fetch_20250910",name:"web_fetch",max_uses:3}],beta:"web-fetch-2025-09-10"}); $("#urlInput").value=""}}]);
 };
 $("#pasteBtn").onclick=()=>{
