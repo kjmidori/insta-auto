@@ -78,7 +78,17 @@ textarea{resize:vertical}
 .setup code,.mono{font-family:var(--f-mono);font-size:.85em}
 .small{font-size:.82rem;color:var(--muted)}
 a{color:var(--accent)}
+h2.sec{font-size:1rem;margin:26px 0 8px;letter-spacing:.02em}
+select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+.paper h3{font-size:.98rem;margin:0 0 2px;text-wrap:balance}
+.paper .cite{font-family:var(--f-mono);font-size:.75rem;color:var(--muted);word-break:break-word}
+.paper details summary{cursor:pointer;font-size:.88rem;color:var(--accent);margin-top:8px}
+.card.paper,.card.draft{grid-template-columns:minmax(0,1fr)}
+.card.draft{grid-template-columns:200px minmax(0,1fr)}
+.card.draft img{width:200px;border-radius:6px;max-width:100%}
 @media (max-width:520px){
+  .card.draft{grid-template-columns:1fr}
+  .card.draft img{width:100%}
   .card{grid-template-columns:1fr}
   .thumb{width:100%;max-height:340px}
 }
@@ -111,6 +121,7 @@ a{color:var(--accent)}
   <main id="app" hidden>
     <nav role="tablist">
       <button role="tab" data-tab="queue" aria-selected="true">投稿待ち</button>
+      <button role="tab" data-tab="papers" aria-selected="false">論文から作る</button>
       <button role="tab" data-tab="add" aria-selected="false">写真を追加</button>
       <button role="tab" data-tab="style" aria-selected="false">文体の設定</button>
       <button role="tab" data-tab="history" aria-selected="false">投稿履歴</button>
@@ -136,9 +147,54 @@ a{color:var(--accent)}
       <p class="small" style="margin-top:14px">投稿文が空のまま投稿時刻を迎えた写真は、その時にAIが自動で文章を書いて投稿します。</p>
     </section>
 
+    <section data-panel="papers" hidden>
+      <div id="akSetup" class="setup" hidden>
+        <h2 style="margin:0 0 6px;font-size:1.05rem">AIの鍵を登録（この端末で1回だけ）</h2>
+        <p class="small" style="margin:0 0 8px">論文PDFはGitHubに保存せず、この端末から直接AIに読ませます。そのためAnthropicのAPIキーが必要です（メモに保存した <code>sk-ant-</code> で始まるキー）。キーはこの端末のブラウザにだけ保存されます。</p>
+        <label for="akInput">AnthropicのAPIキー</label>
+        <input type="password" id="akInput" autocomplete="off" placeholder="sk-ant-...">
+        <div class="actions"><button class="primary" id="akSave">登録する</button></div>
+      </div>
+
+      <div id="paperWork" hidden>
+        <h2 class="sec">1. 論文を読み込む</h2>
+        <div class="drop" id="pdfDrop">
+          <p style="margin:0 0 10px">論文PDFをここにドラッグ、または</p>
+          <label class="btn" for="pdfInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">PDFを選ぶ（複数可）</label>
+          <input type="file" id="pdfInput" accept="application/pdf" multiple hidden>
+          <p class="small" style="margin:10px 0 0">1本30秒〜1分。PDFそのものは保存されず、AIが抜き出した「知見」だけが残ります（100ページ・32MBまで）。</p>
+        </div>
+        <div id="pdfStatus" class="small" style="margin-top:8px"></div>
+
+        <h2 class="sec">2. 読み込んだ論文と知見</h2>
+        <p class="small" style="margin-top:0">AIの読み違いがないか確認してください。投稿はここに書かれた内容だけから作られます。</p>
+        <div id="paperList" class="list"><div class="empty">まだ論文はありません。</div></div>
+
+        <h2 class="sec">3. 投稿を作る</h2>
+        <div class="summary" style="align-items:flex-end">
+          <div style="flex:1 1 220px;min-width:0">
+            <label for="composePaper" style="margin-top:0">使う論文</label>
+            <select id="composePaper"></select>
+          </div>
+          <div>
+            <label for="composeN" style="margin-top:0">作る数</label>
+            <select id="composeN"><option>1</option><option selected>3</option><option>5</option></select>
+          </div>
+          <button class="primary" id="composeBtn">下書きを作る</button>
+        </div>
+        <div id="composeList" class="list"></div>
+        <div class="actions" id="composeBar" hidden>
+          <button class="primary" id="composeAdd">チェックした投稿を投稿待ちに追加</button>
+          <button id="composeClear">すべて破棄</button>
+        </div>
+        <p class="small" style="margin-top:20px"><button id="akReset" style="font-size:.8rem">AIの鍵を登録し直す</button></p>
+      </div>
+    </section>
+
     <section data-panel="add" hidden>
       <div class="drop" id="drop">
         <p style="margin:0 0 10px">写真をここにドラッグ、または</p>
+        <p class="small" style="margin:0 0 10px">AIが写真を見て、「論文から作る」で読み込んだ論文の中から関係する知見を選び、投稿文に使います（合う論文が無ければ写真とメモだけで書きます）。</p>
         <label class="btn" for="fileInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">写真を選ぶ（複数可）</label>
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
       </div>
@@ -430,12 +486,304 @@ async function loadHistory(){
   });
 }
 
+/* ---------- Papers: Claude (browser direct) ---------- */
+let AK=""; try{AK=localStorage.getItem("anthropicKey")||""}catch(e){}
+let papers=[]; let drafts=[];
+async function claude(content,system,maxTokens=4000){
+  if(!cfg) await loadConfig();
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{
+    "x-api-key":AK,"anthropic-version":"2023-06-01","content-type":"application/json",
+    "anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:maxTokens,system,messages:[{role:"user",content}]})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const e=new Error((d.error&&d.error.message)||r.statusText);e.status=r.status;e.ai=true;throw e}
+  const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  const m=text.match(/\{[\s\S]*\}/); if(!m) throw new Error("AIの返答を読み取れませんでした");
+  return JSON.parse(m[0]);
+}
+function aiErr(e){
+  if(e.ai&&e.status===401) return "AIの鍵が正しくありません。下の「AIの鍵を登録し直す」から入れ直してください。";
+  if(e.ai&&/credit|balance/i.test(e.message)) return "Anthropicのクレジット残高がありません。console.anthropic.com の Billing で購入してください。";
+  if(e.ai) return "AIの処理に失敗しました："+e.message;
+  return errText(e);
+}
+function showPaperSetup(){ $("#akSetup").hidden=!!AK; $("#paperWork").hidden=!AK; if(AK) guard(loadPapers) }
+$("#akSave").onclick=()=>{AK=$("#akInput").value.trim(); try{localStorage.setItem("anthropicKey",AK)}catch(e){} showPaperSetup()};
+$("#akReset").onclick=()=>{AK=""; try{localStorage.removeItem("anthropicKey")}catch(e){} $("#akInput").value=""; showPaperSetup()};
+
+async function loadPapers(){
+  const list=await gh("/contents/papers?ref="+BR,{allow404:true})||[];
+  papers=(await Promise.all(list.filter(f=>f.name.endsWith(".json")).map(async f=>{
+    try{const p=JSON.parse(await readText("papers/"+f.name));p._file=f.name;p.used=p.used||[];return p}catch(e){return null}
+  }))).filter(Boolean).sort((a,b)=>(b.added||"").localeCompare(a.added||""));
+  renderPapers();
+}
+const citeOf=p=>[p.authors,p.year&&`(${p.year})`,p.journal].filter(Boolean).join(" ")+(p.doi?` doi:${p.doi}`:"");
+function renderPapers(){
+  const box=$("#paperList"); box.innerHTML="";
+  if(!papers.length) box.innerHTML='<div class="empty">まだ論文はありません。上でPDFを読み込んでください。</div>';
+  papers.forEach((p,i)=>{
+    const unused=p.findings.filter(f=>!p.used.includes(f.id)).length;
+    const c=document.createElement("article"); c.className="card paper";
+    c.innerHTML=`<div style="min-width:0"><h3></h3><div class="cite"></div>
+      <div class="meta" style="margin-top:6px"><span class="pill has">知見 ${p.findings.length}件</span><span class="pill">未使用 ${unused}件</span></div>
+      <p class="small sum" style="margin:6px 0 0"></p>
+      <details><summary>知見を確認・修正する</summary>
+        <label for="pf-${i}">知見（1行に1つ。投稿はこの内容だけから作られます）</label>
+        <textarea id="pf-${i}" rows="10"></textarea>
+        <label for="pl-${i}">研究の限界・注意点</label>
+        <textarea id="pl-${i}" rows="2"></textarea>
+        <div class="actions"><button class="primary" data-a="save">保存</button><button data-a="reset">使用済みを解除</button><button class="danger" data-a="del">この論文を削除</button></div>
+        <div class="confirm" hidden>この論文の知見を削除しますか？ <button class="danger" data-a="delYes">削除する</button><button data-a="delNo">やめる</button></div>
+      </details></div>`;
+    c.querySelector("h3").textContent=p.title; c.querySelector(".cite").textContent=citeOf(p);
+    c.querySelector(".sum").textContent=p.summary||"";
+    c.querySelector(`#pf-${i}`).value=p.findings.map(f=>f.text).join("\n");
+    c.querySelector(`#pl-${i}`).value=p.limitations||"";
+    c.addEventListener("click",e=>{const a=e.target.dataset.a;if(!a)return;
+      if(a==="del"){c.querySelector(".confirm").hidden=false;return}
+      if(a==="delNo"){c.querySelector(".confirm").hidden=true;return}
+      guard(async()=>{
+        if(a==="delYes"){await commit({["papers/"+p._file]:null},"paper delete");banner("削除しました","ok")}
+        else{
+          if(a==="save"){
+            const lines=c.querySelector(`#pf-${i}`).value.split("\n").map(s=>s.trim()).filter(Boolean);
+            p.findings=lines.map((t,k)=>({id:"f"+(k+1),text:t})); p.limitations=c.querySelector(`#pl-${i}`).value.trim();
+            p.used=p.used.filter(id=>p.findings.some(f=>f.id===id));
+          }
+          if(a==="reset") p.used=[];
+          await savePaper(p); banner("保存しました","ok");
+        }
+        await loadPapers();
+      });
+    });
+    box.append(c);
+  });
+  const sel=$("#composePaper"); const cur=sel.value; sel.innerHTML='<option value="">おまかせ（未使用の知見が多い論文から）</option>';
+  papers.forEach(p=>{const o=document.createElement("option");o.value=p._file;o.textContent=`${p.title.slice(0,40)}（${p.year||"年不明"}）`;sel.append(o)});
+  sel.value=cur;
+}
+async function savePaper(p,msg="paper edit"){
+  const {_file,...data}=p; await commit({["papers/"+_file]:textToB64(JSON.stringify(data,null,2)+"\n")},msg);
+}
+
+const INGEST_SYS=`あなたは研究論文を正確に読み取る研究アシスタントです。渡された論文PDFの内容だけを根拠に、一般向け発信の素材となる「知見」を抽出します。
+厳守：
+- 論文に書かれていないこと、一般論、推測を加えない。数値・対象・条件・地域・期間は論文の記載どおりに書く
+- 知見は日本語で、1つずつ独立して読める具体的な一文（〜50〜120字）。原文の長い直訳・引用はしない
+- 8〜15個。結果・方法の要点・比較・数値を優先し、著者の推測は「著者らは〜と考察している」と区別する
+- 健康効果や商品の効能に話を広げない
+出力はJSONのみ：
+{"title":"論文タイトル（原題）","title_ja":"日本語訳タイトル","authors":"筆頭著者姓 名イニシャル et al.","year":"西暦","journal":"雑誌名","doi":"DOI（無ければ空）","summary":"何を調べ何が分かったか（150字以内・日本語）","findings":["知見1","知見2"],"limitations":"研究の限界・注意点（100字以内）"}`;
+
+async function ingest(file){
+  if(file.size>32*1024*1024) throw new Error(file.name+" は32MBを超えています");
+  const b64=bytesToB64(new Uint8Array(await file.arrayBuffer()));
+  const j=await claude([{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:"この論文から知見を抽出してください。"}],INGEST_SYS,6000);
+  const id=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14)+"_"+Math.random().toString(36).slice(2,6);
+  const p={title:j.title_ja?`${j.title_ja}`:j.title,title_original:j.title||"",authors:j.authors||"",year:String(j.year||""),journal:j.journal||"",doi:j.doi||"",
+    summary:j.summary||"",findings:(j.findings||[]).map((t,k)=>({id:"f"+(k+1),text:String(t)})),limitations:j.limitations||"",used:[],added:new Date().toISOString(),source_file:file.name,_file:id+".json"};
+  if(!p.findings.length) throw new Error(file.name+" から知見を抽出できませんでした");
+  await savePaper(p,"paper add: "+p.title.slice(0,40));
+}
+async function ingestFiles(fl){
+  const files=[...fl].filter(f=>f.type==="application/pdf"||/\.pdf$/i.test(f.name)); if(!files.length) return;
+  guard(async()=>{
+    const st=$("#pdfStatus"); let ok=0;
+    for(let i=0;i<files.length;i++){
+      st.textContent=`読み込み中 ${i+1}/${files.length}：${files[i].name}（30秒〜1分）`;
+      try{await ingest(files[i]);ok++}catch(e){console.error(e);banner(files[i].name+"："+aiErr(e),"err")}
+    }
+    st.textContent=""; if(ok) banner(`${ok}本の論文を読み込みました。下で知見を確認してください`,"ok");
+    await loadPapers();
+  });
+}
+$("#pdfInput").onchange=e=>{ingestFiles(e.target.files);e.target.value=""};
+const pdrop=$("#pdfDrop");
+pdrop.ondragover=e=>{e.preventDefault();pdrop.classList.add("over")};
+pdrop.ondragleave=()=>pdrop.classList.remove("over");
+pdrop.ondrop=e=>{e.preventDefault();pdrop.classList.remove("over");ingestFiles(e.dataTransfer.files)};
+
+/* ---------- Compose post + card image ---------- */
+function composeSys(){
+  const rules=(cfg.rules||[]).map(r=>"- "+r).join("\n");
+  return `あなたはInstagramで研究論文の知見を一般の人にわかりやすく伝える担当です。
+【アカウント】
+${cfg.account_profile||""}
+【文体】
+${cfg.tone||""}
+【厳守ルール】
+${rules}
+- 使ってよい情報は【知見】【研究の限界】に書かれた内容だけ。書かれていない数値・因果・一般論・豆知識を足さない
+- 研究結果を蜂蜜や商品の効能・健康効果に結びつけない。「この研究では〜と報告されている」という紹介に留める
+- 専門用語はやさしく言い換える。誇張しない（「証明された」「必ず」などは使わない）
+- 研究の対象や条件の限定を1文入れる
+出力はJSONのみ：
+{"use":["使った知見のid"],"headline":"画像の見出し（28字以内・内容が一目でわかる）","points":["画像に載せる要点（各40字以内、2〜4個）"],
+"chart":null または {"title":"グラフの題（20字以内）","unit":"単位","labels":["項目（10字以内）"],"values":[数値]},
+"caption":"投稿本文（${cfg.max_caption_chars||600}字以内。導入→内容→限界の順。末尾は改行して『出典：』の行のあと、ハッシュタグ）"}
+chartは知見に同じ単位で比較できる数値が2〜6個明記されている場合だけ作り、値は知見の記載どおりにする。それ以外はnull。
+ハッシュタグは ${(cfg.fixed_hashtags||[]).join(" ")} を必ず含め、内容に合うものを3〜5個追加。`;
+}
+function pickPaper(selected,taken){
+  if(selected) return papers.find(p=>p._file===selected);
+  const score=p=>p.findings.filter(f=>!p.used.includes(f.id)&&!(taken[p._file]||[]).includes(f.id)).length;
+  return [...papers].sort((a,b)=>score(b)-score(a))[0];
+}
+$("#composeBtn").onclick=()=>guard(async()=>{
+  if(!papers.length){banner("先に論文を読み込んでください");return}
+  if(!cfg) await loadConfig();
+  const n=+$("#composeN").value, sel=$("#composePaper").value, taken={};
+  await document.fonts.load('700 64px "Zen Kaku Gothic New"'); await document.fonts.load('400 36px "Zen Kaku Gothic New"');
+  for(let k=0;k<n;k++){
+    const p=pickPaper(sel,taken); if(!p) break;
+    const avoid=[...p.used,...(taken[p._file]||[])];
+    let pool=p.findings.filter(f=>!avoid.includes(f.id)); if(!pool.length) pool=p.findings;
+    banner(`下書きを作っています ${k+1}/${n}…`);
+    const user=`【論文】${p.title}${p.title_original?`（${p.title_original}）`:""}
+【出典表記】${citeOf(p)}
+【知見】
+${pool.map(f=>`${f.id}: ${f.text}`).join("\n")}
+【研究の限界】${p.limitations||"記載なし"}
+${drafts.length||k?`【既に作った投稿の見出し（重複を避ける）】${drafts.map(d=>d.headline).join(" / ")}`:""}
+この中から1つの話題に絞り、投稿を1件作ってください。`;
+    try{
+      const j=await claude(user,composeSys(),3000);
+      const use=(j.use||[]).filter(id=>p.findings.some(f=>f.id===id));
+      taken[p._file]=[...(taken[p._file]||[]),...use];
+      const d={paper:p._file,cite:citeOf(p),use,headline:j.headline||"",points:(j.points||[]).slice(0,4),chart:validChart(j.chart),caption:(j.caption||"").trim(),on:true};
+      d.img=drawCard(d); drafts.push(d); renderDrafts();
+    }catch(e){console.error(e);banner(aiErr(e),"err");return}
+  }
+  banner("下書きができました。画像と文章を確認し、必要なら直してから追加してください","ok");
+});
+function validChart(c){
+  if(!c||!Array.isArray(c.labels)||!Array.isArray(c.values)) return null;
+  const v=c.values.map(Number); if(v.length<2||v.length>6||v.length!==c.labels.length||v.some(x=>!isFinite(x)||x<0)) return null;
+  return {title:String(c.title||""),unit:String(c.unit||""),labels:c.labels.map(String),values:v};
+}
+
+/* 1080x1350 図解カード */
+const CARD={bg:"#f1f3ec",ink:"#17201a",green:"#2d5737",honey:"#c4871a",muted:"#56635a",bar:"#2d5737",soft:"#dfe5d8"};
+const CF='"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif';
+function wrapText(ctx,text,maxW){
+  const NO_START="、。，．・：；？！」』）】〕ー々ゝゞぁぃぅぇぉっゃゅょァィゥェォッャュョ%)";
+  const lines=[]; let line="";
+  for(const ch of [...text]){
+    if(ch==="\n"){lines.push(line);line="";continue}
+    const t=line+ch;
+    if(ctx.measureText(t).width>maxW&&line){
+      if(NO_START.includes(ch)){line=t;continue}
+      lines.push(line); line=ch;
+    } else line=t;
+  }
+  if(line) lines.push(line); return lines;
+}
+function drawCard(d){
+  const W=1080,H=1350,P=84,cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d");
+  for(let s=1;s>=0.6;s-=0.05){
+    ctx.fillStyle=CARD.bg; ctx.fillRect(0,0,W,H);
+    // 上部ラベル
+    ctx.fillStyle=CARD.green; ctx.fillRect(0,0,W,18);
+    ctx.font=`700 30px ${CF}`; ctx.fillStyle=CARD.green; ctx.textBaseline="top";
+    ctx.fillText("論文を、やさしく。",P,P-8);
+    let y=P+70;
+    // 見出し
+    const hs=Math.round(66*s); ctx.font=`700 ${hs}px ${CF}`; ctx.fillStyle=CARD.ink;
+    for(const l of wrapText(ctx,d.headline,W-2*P)){ctx.fillText(l,P,y); y+=Math.round(hs*1.36)}
+    y+=18; ctx.fillStyle=CARD.honey; ctx.fillRect(P,y,120,8); y+=48;
+    // 要点
+    const ps=Math.round(38*s); ctx.font=`400 ${ps}px ${CF}`;
+    for(const pt of d.points){
+      ctx.fillStyle=CARD.honey; ctx.beginPath(); ctx.arc(P+10,y+ps*0.6,9,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=CARD.ink;
+      for(const l of wrapText(ctx,pt,W-2*P-44)){ctx.fillText(l,P+44,y); y+=Math.round(ps*1.55)}
+      y+=Math.round(ps*0.55);
+    }
+    // グラフ
+    if(d.chart){
+      y+=10; const c=d.chart, rowH=Math.round(62*s), labW=300, max=Math.max(...c.values)||1;
+      ctx.font=`700 ${Math.round(30*s)}px ${CF}`; ctx.fillStyle=CARD.muted; ctx.fillText(c.title+(c.unit?`（${c.unit}）`:""),P,y); y+=Math.round(52*s);
+      ctx.font=`400 ${Math.round(30*s)}px ${CF}`;
+      c.labels.forEach((lb,i)=>{
+        const bw=(W-2*P-labW-150)*(c.values[i]/max);
+        ctx.fillStyle=CARD.ink; ctx.fillText(wrapText(ctx,lb,labW-20)[0]||"",P,y+8);
+        ctx.fillStyle=CARD.soft; ctx.fillRect(P+labW,y,W-2*P-labW-150,rowH-18);
+        ctx.fillStyle=CARD.bar; ctx.fillRect(P+labW,y,Math.max(4,bw),rowH-18);
+        ctx.fillStyle=CARD.ink; ctx.font=`700 ${Math.round(30*s)}px ${CF}`;
+        ctx.fillText(c.values[i].toLocaleString("ja-JP")+(c.unit||""),W-P-136,y+8);
+        ctx.font=`400 ${Math.round(30*s)}px ${CF}`; y+=rowH;
+      });
+    }
+    // 出典（下部）
+    ctx.font=`400 24px ${CF}`; const cl=wrapText(ctx,"出典："+d.cite,W-2*P).slice(0,3);
+    const fy=H-P-cl.length*36;
+    if(y<=fy-30||s<=0.62){
+      ctx.fillStyle=CARD.soft; ctx.fillRect(P,fy-26,W-2*P,2);
+      ctx.fillStyle=CARD.muted; cl.forEach((l,i)=>ctx.fillText(l,P,fy+i*36));
+      break;
+    }
+  }
+  return cv.toDataURL("image/jpeg",0.92);
+}
+function renderDrafts(){
+  const box=$("#composeList"); box.innerHTML="";
+  drafts.forEach((d,i)=>{
+    const c=document.createElement("article"); c.className="card draft";
+    c.innerHTML=`<img alt="生成した図解カード">
+      <div style="min-width:0">
+        <label class="row" style="margin:0 0 6px;gap:6px;color:var(--fg);font-size:.88rem"><input type="checkbox" class="on"> 投稿待ちに追加する</label>
+        <div class="cite"></div>
+        <label for="dh-${i}">画像の見出し</label><input type="text" id="dh-${i}">
+        <label for="dp-${i}">画像の要点（1行に1つ）</label><textarea id="dp-${i}" rows="3"></textarea>
+        <label for="dc-${i}">投稿文</label><textarea id="dc-${i}" class="cap"></textarea>
+        <div class="actions"><button data-a="redraw">画像を作り直す</button></div>
+      </div>`;
+    c.querySelector("img").src=d.img; c.querySelector(".cite").className="fname"; c.querySelector(".fname").textContent="出典："+d.cite;
+    const on=c.querySelector(".on"); on.checked=d.on; on.onchange=()=>d.on=on.checked;
+    const h=c.querySelector(`#dh-${i}`), p=c.querySelector(`#dp-${i}`), cap=c.querySelector(`#dc-${i}`);
+    h.value=d.headline; p.value=d.points.join("\n"); cap.value=d.caption;
+    h.oninput=()=>d.headline=h.value; p.oninput=()=>d.points=p.value.split("\n").map(s=>s.trim()).filter(Boolean); cap.oninput=()=>d.caption=cap.value;
+    c.querySelector("[data-a=redraw]").onclick=()=>{d.img=drawCard(d);c.querySelector("img").src=d.img};
+    box.append(c);
+  });
+  $("#composeBar").hidden=!drafts.length;
+}
+$("#composeClear").onclick=()=>{drafts=[];renderDrafts()};
+$("#composeAdd").onclick=()=>guard(async()=>{
+  const sel=drafts.filter(d=>d.on); if(!sel.length){banner("追加する投稿にチェックを入れてください");return}
+  await loadQueue();
+  const ts=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
+  const ch={}, names=[], usedBy={};
+  sel.forEach((d,i)=>{
+    d.img=drawCard(d);
+    const name=`paper_${ts}_${String(i+1).padStart(2,"0")}.jpg`, stem=stemOf(name);
+    ch["queue/"+name]=d.img.split(",")[1];
+    ch["queue/"+stem+".caption.txt"]=textToB64(d.caption.trim()+"\n");
+    ch["queue/"+stem+".txt"]=textToB64(`論文投稿　出典：${d.cite}\n使用した知見：${d.use.join(", ")}\n`);
+    localPreview[name]=d.img; names.push(name);
+    usedBy[d.paper]=[...(usedBy[d.paper]||[]),...d.use];
+  });
+  for(const [file,ids] of Object.entries(usedBy)){
+    const p=papers.find(x=>x._file===file); if(!p) continue;
+    p.used=[...new Set([...p.used,...ids])]; const {_file,...data}=p;
+    ch["papers/"+file]=textToB64(JSON.stringify(data,null,2)+"\n");
+  }
+  ch["queue/order.txt"]=orderB64([...items.map(x=>x.name),...names]);
+  banner("投稿待ちに追加しています…");
+  await commit(ch,`add: 論文投稿 ${names.length}件`);
+  drafts=drafts.filter(d=>!d.on); renderDrafts(); await loadPapers(); await loadQueue();
+  banner(`${names.length}件を投稿待ちに追加しました。「投稿待ち」タブで順番を確認できます`,"ok");
+});
+
 /* ---------- Tabs & start ---------- */
 function showTab(t){
   document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===t));
   document.querySelectorAll("[data-panel]").forEach(p=>p.hidden=p.dataset.panel!==t);
   if(t==="style"&&!cfg) guard(loadConfig);
   if(t==="history") guard(loadHistory);
+  if(t==="papers") showPaperSetup();
 }
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $("#tokenSave").onclick=async()=>{

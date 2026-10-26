@@ -115,6 +115,46 @@ def fit_for_instagram(src: Path, dst: Path):
     return dst
 
 
+# ---------- 論文の書庫 ----------
+PAPERS = ROOT / "papers"
+
+
+def load_library(max_chars=80000):
+    """papers/*.json を「P番号-f番号: 知見（出典）」の一覧にする"""
+    if not PAPERS.exists():
+        return ""
+    lines = []
+    for i, f in enumerate(sorted(PAPERS.glob("*.json")), 1):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        cite = " ".join(x for x in [p.get("authors", ""), f"({p['year']})" if p.get("year") else "", p.get("journal", "")] if x)
+        if p.get("doi"):
+            cite += f" doi:{p['doi']}"
+        lines.append(f"■P{i}『{p.get('title', '')}』 出典表記：{cite}")
+        if p.get("limitations"):
+            lines.append(f"  研究の限界：{p['limitations']}")
+        for fd in p.get("findings", []):
+            lines.append(f"  P{i}-{fd.get('id')}: {fd.get('text')}")
+    text = "\n".join(lines)
+    return text[:max_chars]
+
+
+def recent_captions(n=8):
+    """最近投稿した文章（重複を避けるため）"""
+    if not LOG.exists():
+        return []
+    rows = list(csv.reader(LOG.open(encoding="utf-8")))[1:][-n:]
+    out = []
+    for r in rows:
+        if len(r) >= 2:
+            f = POSTED / (Path(r[1]).stem + "_caption.txt")
+            if f.exists():
+                out.append(f.read_text(encoding="utf-8")[:300])
+    return out
+
+
 # ---------- キャプション生成 ----------
 def generate_caption(cfg, img_path: Path, memo_text: str) -> str:
     if memo_text.lstrip().startswith("caption:"):
@@ -140,13 +180,30 @@ def generate_caption(cfg, img_path: Path, memo_text: str) -> str:
 それ以外に内容に合うハッシュタグを3〜5個追加。
 全体で{cfg.get('max_caption_chars', 600)}文字以内。"""
 
+    library = load_library()
+    if library:
+        system += """
+
+【論文の書庫の使い方】
+- まず写真とメモに写っている・書かれている内容を把握し、書庫の中から「その内容に直接関係する知見」を最大3つ選んで、写真の話題をわかりやすく補足する
+- 関係が薄い知見をこじつけない。明確に関係する知見が無ければ、論文には触れず写真とメモだけで書く
+- 知見を使う場合は、書庫に書かれた内容だけを使い、数値や条件を変えない。誇張しない
+- 研究結果を商品の効能・健康効果に結びつけない。「〜という研究があります」という紹介に留める
+- 論文を使った場合、ハッシュタグの前に『出典：』の行を入れ、使った論文の出典表記をそのまま書く
+- 最近の投稿と同じ知見・同じ話の繰り返しは避ける"""
+
     user = "この写真の投稿キャプションを書いてください。"
     if memo_text.strip():
         user += f"\n\n【撮影者のメモ（事実はここに書かれたものだけを使う）】\n{memo_text.strip()}"
+    if library:
+        user += f"\n\n【論文の書庫】\n{library}"
+        recent = recent_captions()
+        if recent:
+            user += "\n\n【最近の投稿（重複を避ける）】\n" + "\n---\n".join(recent)
 
     msg = client.messages.create(
         model=cfg.get("model", "claude-sonnet-5-5"),
-        max_tokens=1500,
+        max_tokens=2000,
         system=system,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
