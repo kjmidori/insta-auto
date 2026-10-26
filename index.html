@@ -78,6 +78,15 @@ textarea{resize:vertical}
 .setup code,.mono{font-family:var(--f-mono);font-size:.85em}
 .small{font-size:.82rem;color:var(--muted)}
 a{color:var(--accent)}
+.mediagrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;margin:12px 0}
+.mediagrid figure{margin:0;position:relative}
+.mediagrid img,.mediagrid video,.scene .sthumb{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:6px;background:var(--line);display:block}
+.mediagrid figcaption{font-family:var(--f-mono);font-size:.7rem;color:var(--muted);margin-top:2px}
+.mediagrid button{position:absolute;top:4px;right:4px;padding:2px 8px;font-size:.75rem}
+.card.scene{grid-template-columns:96px minmax(0,1fr)}
+.scene .sthumb{width:96px}
+.scene .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:0 10px}
+.reelvideo{width:100%;max-width:300px;aspect-ratio:9/16;border-radius:8px;background:#000;display:block;margin-top:12px}
 fieldset.ov{border:1px solid var(--line);border-radius:8px;padding:4px 12px 12px;margin:12px 0 0;min-width:0}
 fieldset.ov legend{padding:0 6px}
 h2.sec{font-size:1rem;margin:26px 0 8px;letter-spacing:.02em}
@@ -125,6 +134,7 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
       <button role="tab" data-tab="queue" aria-selected="true">投稿待ち</button>
       <button role="tab" data-tab="papers" aria-selected="false">論文から作る</button>
       <button role="tab" data-tab="add" aria-selected="false">写真を追加</button>
+      <button role="tab" data-tab="reel" aria-selected="false">リールを作る</button>
       <button role="tab" data-tab="style" aria-selected="false">文体の設定</button>
       <button role="tab" data-tab="history" aria-selected="false">投稿履歴</button>
     </nav>
@@ -194,6 +204,42 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
       </div>
     </section>
 
+    <section data-panel="reel" hidden>
+      <div id="reelNoKey" class="empty" hidden>先に「論文から作る」タブで、AIの鍵を登録してください。</div>
+      <div id="reelWork">
+        <div id="reelStart">
+          <h2 class="sec" style="margin-top:0">1. 素材を入れる</h2>
+          <div class="drop" id="reelDrop">
+            <p style="margin:0 0 10px">写真・動画をここにドラッグ、または</p>
+            <label class="btn" for="reelInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">写真・動画を選ぶ（複数可）</label>
+            <input type="file" id="reelInput" accept="image/*,video/*" multiple hidden>
+            <p class="small" style="margin:10px 0 0">動画は1本50MBまで（スマホで1分弱が目安）。音は使わず、無音のリールになります。</p>
+          </div>
+          <div id="reelMedia" class="mediagrid"></div>
+          <label for="reelMemo">メモ（任意：撮影場所や状況など、AIに伝える事実）</label>
+          <textarea id="reelMemo" rows="2" placeholder="例：群馬の巣箱。10月下旬の午後、入口の出入りが活発"></textarea>
+          <div class="actions"><button class="primary" id="reelPlanBtn">AIに編集案を作らせる</button></div>
+          <h2 class="sec">作りかけのリール</h2>
+          <div id="reelDrafts" class="small">読み込み中…</div>
+        </div>
+        <div id="reelEdit" hidden>
+          <h2 class="sec" style="margin-top:0">2. 編集案を確認・修正する</h2>
+          <p class="small" style="margin-top:0">字幕は論文の書庫から作られています。順番・長さ・字幕・動きを直してから「動画を作る」を押してください。触らなければAIの案のまま作られます。</p>
+          <div class="summary"><div>合計 <b id="reelTotal">0</b> 秒 <span class="small">（15〜30秒がおすすめ）</span></div><div class="small" id="reelMatch"></div></div>
+          <div id="sceneList" class="list"></div>
+          <div class="actions"><button id="sceneAdd">シーンを追加</button></div>
+          <label for="reelCaption">投稿文</label>
+          <textarea id="reelCaption" class="cap"></textarea>
+          <div class="actions">
+            <button class="primary" id="reelRender">動画を作る（1〜3分）</button>
+            <button id="reelSave">編集案を保存</button>
+            <button id="reelBack">一覧に戻る</button>
+          </div>
+          <div id="reelPreview"></div>
+        </div>
+      </div>
+    </section>
+
     <section data-panel="add" hidden>
       <div class="drop" id="drop">
         <p style="margin:0 0 10px">写真をここにドラッグ、または</p>
@@ -235,7 +281,7 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
 const OWNER="kjmidori", REPO="insta-auto", BR="main";
 const API=`https://api.github.com/repos/${OWNER}/${REPO}`;
 const RAW=`https://raw.githubusercontent.com/${OWNER}/${REPO}/${BR}/`;
-const IMG=/\.(jpe?g|png|webp|heic)$/i;
+const IMG=/\.(jpe?g|png|webp|heic)$/i, VID=/\.(mp4|mov)$/i, MEDIA=/\.(jpe?g|png|webp|heic|mp4|mov)$/i;
 const $=s=>document.querySelector(s);
 let TOKEN=""; try{TOKEN=localStorage.getItem("ghToken")||""}catch(e){}
 let items=[]; const localPreview={}; let busy=false;
@@ -294,7 +340,7 @@ async function loadQueue(){
   const files=Object.fromEntries(list.map(f=>[f.name,f]));
   const srcList=await gh("/contents/source?ref="+BR,{allow404:true})||[];
   const srcFiles=Object.fromEntries(srcList.map(f=>[f.name,f]));
-  const imgs=list.filter(f=>IMG.test(f.name)).map(f=>f.name);
+  const imgs=list.filter(f=>MEDIA.test(f.name)).map(f=>f.name);
   const orderTxt=files["order.txt"]?await readText("queue/order.txt"):"";
   const order=(orderTxt||"").split("\n").map(s=>s.trim()).filter(n=>imgs.includes(n));
   const names=[...new Set([...order,...imgs.sort()])];
@@ -342,7 +388,12 @@ function renderQueue(){
       <div class="confirm" hidden>この写真を投稿待ちから削除しますか？
         <button class="danger" data-act="delYes">削除する</button><button data-act="delNo">やめる</button></div>
     </div>`;
-    c.querySelector(".thumb").src=it.src;
+    if(VID.test(it.name)){
+      const v=document.createElement("video"); v.className="thumb"; playableURL(it.src,it.name).then(u=>v.src=u).catch(console.warn); v.controls=true; v.muted=true; v.playsInline=true; v.preload="metadata";
+      c.querySelector(".thumb").replaceWith(v);
+      c.querySelector("fieldset.ov").hidden=true; c.querySelector("[data-act=redraft]").hidden=true;
+      c.querySelector("label[for^=m-]").hidden=true; c.querySelector("textarea[id^=m-]").hidden=true;
+    } else c.querySelector(".thumb").src=it.src;
     c.querySelector(".fname").textContent=it.name;
     c.querySelector("textarea[id^=m-]").value=it.memo;
     c.querySelector("textarea[id^=c-]").value=it.caption;
@@ -980,6 +1031,199 @@ $("#composeAdd").onclick=()=>guard(async()=>{
   banner(`${names.length}件を投稿待ちに追加しました。「投稿待ち」タブで順番を確認できます`,"ok");
 });
 
+/* ---------- Reels ---------- */
+/* GitHubの生ファイルは動画として再生できないことがあるため、取り込んで再生用URLにする */
+const vcache={};
+async function playableURL(url,name=""){
+  if(!url||url.startsWith("blob:")) return url;
+  if(vcache[url]) return vcache[url];
+  const r=await fetch(url,{cache:"no-store"}); if(!r.ok) throw new Error("動画を読み込めませんでした");
+  const type=/\.mov$/i.test(name||url.split("?")[0])?"video/quicktime":"video/mp4";
+  return vcache[url]=URL.createObjectURL(new Blob([await r.blob()],{type}));
+}
+let reelPending=[], reel=null;
+const MOTIONS={"zoom-in":"ゆっくり寄る","zoom-out":"ゆっくり引く","pan-left":"左へ流す","pan-right":"右へ流す","none":"動かさない"};
+function showReel(){ $("#reelNoKey").hidden=!!AK; $("#reelWork").hidden=!AK; if(AK) guard(loadReelDrafts) }
+function videoMeta(url){return new Promise((res,rej)=>{const v=document.createElement("video");v.muted=true;v.preload="metadata";v.playsInline=true;
+  v.onloadedmetadata=()=>res(v);v.onerror=()=>rej(new Error("動画を読み込めませんでした（形式未対応の可能性）"));v.src=url})}
+async function grabFrame(v,t,w=480){
+  await new Promise(r=>{v.onseeked=r;v.currentTime=Math.min(t,Math.max(0,v.duration-0.05))});
+  const s=w/Math.max(v.videoWidth,v.videoHeight),c=document.createElement("canvas");c.width=Math.round(v.videoWidth*s);c.height=Math.round(v.videoHeight*s);
+  c.getContext("2d").drawImage(v,0,0,c.width,c.height);return c.toDataURL("image/jpeg",0.8);
+}
+function addReelFiles(fl){
+  for(const f of fl){
+    const isV=f.type.startsWith("video/")||VID.test(f.name), isI=f.type.startsWith("image/")||IMG.test(f.name);
+    if(!isV&&!isI) continue;
+    if(isV&&f.size>50*1024*1024){banner(`${f.name} は50MBを超えています。スマホで短くしてから入れてください`,"err");continue}
+    reelPending.push({file:f,type:isV?"video":"photo",url:URL.createObjectURL(f)});
+  }
+  renderReelPending();
+}
+function renderReelPending(){
+  const g=$("#reelMedia"); g.innerHTML="";
+  reelPending.forEach((m,i)=>{
+    const fig=document.createElement("figure");
+    fig.innerHTML=(m.type==="video"?`<video muted playsinline preload="metadata"></video>`:`<img alt="">`)+`<figcaption></figcaption><button aria-label="外す">×</button>`;
+    fig.firstChild.src=m.url+(m.type==="video"?"#t=0.5":""); fig.querySelector("figcaption").textContent=(m.type==="video"?"動画 ":"写真 ")+m.file.name;
+    fig.querySelector("button").onclick=()=>{reelPending.splice(i,1);renderReelPending()};
+    g.append(fig);
+  });
+}
+$("#reelInput").onchange=e=>{addReelFiles(e.target.files);e.target.value=""};
+const rdrop=$("#reelDrop");
+rdrop.ondragover=e=>{e.preventDefault();rdrop.classList.add("over")};
+rdrop.ondragleave=()=>rdrop.classList.remove("over");
+rdrop.ondrop=e=>{e.preventDefault();rdrop.classList.remove("over");addReelFiles(e.dataTransfer.files)};
+
+function reelSys(styleGuide){
+  const rules=(cfg.rules||[]).map(r=>"- "+r).join("\n");
+  return `あなたはInstagramリール（縦動画）の編集者です。渡された写真・動画（動画は数枚の場面画像と長さ）と【論文の書庫】から、15〜30秒の無音リールの編集案を作ります。
+【アカウント】
+${cfg.account_profile||""}
+【文体】
+${cfg.tone||""}
+【厳守ルール】
+${rules}
+- 字幕と投稿文に使う研究の情報は、書庫の知見に書かれた内容だけ。数値・条件を変えない。書庫にない一般論を足さない
+- 素材の内容に直接関係する知見を1〜3個選ぶ。関係が薄い知見をこじつけない。合う知見が無ければ matched を false にし、字幕はメモと映像から読み取れる事実だけで作る
+- 研究結果を商品の効能・健康効果に結びつけない
+- 写真やメモから読み取れない事実を作らない
+【編集の方針】
+- 無音なので、字幕だけで話が通じる構成にする：1シーン目は問いかけ（18字以内）→ 本題（知見）→ 研究の条件 → 最後のシーンは「出典：〜」（書庫の出典表記どおり）
+- 6〜10シーン。写真は2.5〜4秒、動画は見どころの2〜6秒を切り出す（start/endは場面画像の時刻を目安に、長さの範囲内で）
+- 同じ素材を複数回使ってよい。字幕は1シーン28字以内、読み切れる長さに
+- 写真の動きは zoom-in / zoom-out / pan-left / pan-right / none から、単調にならないよう選ぶ
+${styleGuide?`【これまでのお手本・修正から分かった好み（優先して従う）】\n${styleGuide}`:""}
+出力はJSONのみ：
+{"matched":true,"use":["P1-f2"],"scenes":[{"media":"m1","duration":3,"motion":"zoom-in","text":"字幕"},{"media":"m2","start":1.0,"end":4.5,"text":"字幕"}],
+"caption":"投稿文（${cfg.max_caption_chars||600}字以内。論文を使ったらハッシュタグの前に『出典：』の行。ハッシュタグは ${(cfg.fixed_hashtags||[]).join(" ")} を必ず含め3〜5個追加）"}`;
+}
+$("#reelPlanBtn").onclick=()=>guard(async()=>{
+  if(!reelPending.length){banner("先に写真か動画を入れてください");return}
+  if(!cfg) await loadConfig(); if(!papersLoaded) await loadPapers();
+  banner("素材を読み取っています…");
+  const media=[], content=[];
+  for(let i=0;i<reelPending.length;i++){
+    const m=reelPending[i], id="m"+(i+1);
+    if(m.type==="video"){
+      const v=await videoMeta(m.url), dur=v.duration, n=Math.min(6,Math.max(2,Math.ceil(dur/2.5)));
+      media.push({id,type:"video",duration:Math.round(dur*10)/10,ext:(m.file.name.split(".").pop()||"mp4").toLowerCase(),local:m});
+      content.push({type:"text",text:`【${id}】動画・長さ${dur.toFixed(1)}秒。以下は場面画像：`});
+      for(let k=0;k<n;k++){const t=dur*(k+0.5)/n; content.push({type:"text",text:`${id} の ${t.toFixed(1)}秒地点`});
+        content.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:(await grabFrame(v,t)).split(",")[1]}})}
+    }else{
+      media.push({id,type:"photo",ext:"jpg",local:m});
+      content.push({type:"text",text:`【${id}】写真`});
+      const small=await (async()=>{const b=await loadBitmap(m.url),s=Math.min(1,640/Math.max(b.width,b.height)),c=document.createElement("canvas");c.width=Math.round(b.width*s);c.height=Math.round(b.height*s);c.getContext("2d").drawImage(b,0,0,c.width,c.height);return c.toDataURL("image/jpeg",0.8)})();
+      content.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:small.split(",")[1]}});
+    }
+  }
+  const memo=$("#reelMemo").value.trim();
+  let user="この素材でリールの編集案を作ってください。";
+  if(memo) user+=`\n\n【撮影者のメモ（事実はここに書かれたものだけを使う）】\n${memo}`;
+  user+=papers.length?`\n\n【論文の書庫】\n${libraryText()}`:"\n\n【論文の書庫】（まだ論文がありません。matched は false）";
+  content.push({type:"text",text:user});
+  const styleGuide=await readText("style/reel_style.md").catch(()=>null);
+  banner("AIが編集案を作っています（30秒〜1分）…");
+  const j=await claude(content,reelSys(styleGuide),4000);
+  const id=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
+  const ids=new Set(media.map(m=>m.id));
+  reel={id,memo,matched:j.matched!==false,use:j.use||[],caption:String(j.caption||"").trim(),
+    media:media.map(m=>({id:m.id,type:m.type,file:`${m.id}.${m.ext}`,duration:m.duration,url:m.local.url,local:m.local})),
+    scenes:(j.scenes||[]).filter(sc=>ids.has(sc.media)).map(sc=>normScene(sc))};
+  if(!reel.scenes.length) reel.scenes=reel.media.map(m=>normScene({media:m.id}));
+  banner("素材を保存しています（動画は少し時間がかかります）…");
+  const ch={};
+  for(const m of reel.media){
+    if(m.type==="photo"){ch[`reels/${id}/media/${m.file}`]=(await toJpegDataURL(m.url)).split(",")[1]}
+    else ch[`reels/${id}/media/${m.file}`]=bytesToB64(new Uint8Array(await m.local.file.arrayBuffer()));
+  }
+  ch[`reels/${id}/plan_ai.json`]=textToB64(JSON.stringify(planData(),null,2)+"\n");
+  ch[`reels/${id}/plan.json`]=textToB64(JSON.stringify(planData(),null,2)+"\n");
+  await commit(ch,"reel plan: "+id);
+  reelPending=[]; renderReelPending(); $("#reelMemo").value="";
+  openReelEditor();
+  banner(reel.matched?"編集案ができました。確認して「動画を作る」を押してください":"編集案ができました（書庫に合う論文が見つからなかったため、字幕はメモと映像から作っています）","ok");
+});
+function normScene(sc){
+  const m=reel?reel.media.find(x=>x.id===sc.media):null;
+  const o={media:sc.media,text:String(sc.text||"")};
+  if(m&&m.type==="video"||sc.start!==undefined){const st=Math.max(0,+sc.start||0);o.start=Math.round(st*10)/10;o.end=Math.round(Math.max(st+1,+sc.end||st+3)*10)/10}
+  else{o.duration=Math.min(10,Math.max(1,+sc.duration||3));o.motion=MOTIONS[sc.motion]?sc.motion:"zoom-in"}
+  return o;
+}
+function planData(){return {id:reel.id,memo:reel.memo,matched:reel.matched,use:reel.use,caption:reel.caption,
+  media:reel.media.map(({id,type,file,duration})=>({id,type,file,duration})),scenes:reel.scenes}}
+function sceneDur(sc){return sc.duration!==undefined?sc.duration:Math.max(0,sc.end-sc.start)}
+function openReelEditor(){ $("#reelStart").hidden=true; $("#reelEdit").hidden=false; $("#reelCaption").value=reel.caption; renderScenes(); $("#reelPreview").innerHTML="" }
+function renderScenes(){
+  const box=$("#sceneList"); box.innerHTML="";
+  $("#reelTotal").textContent=reel.scenes.reduce((a,sc)=>a+sceneDur(sc),0).toFixed(1);
+  $("#reelMatch").textContent=reel.matched?(reel.use.length?"使った知見："+reel.use.join(", "):""):"書庫に合う論文なし";
+  reel.scenes.forEach((sc,i)=>{
+    const m=reel.media.find(x=>x.id===sc.media)||reel.media[0], isV=m.type==="video";
+    const c=document.createElement("article"); c.className="card scene";
+    c.innerHTML=`${isV?'<video class="sthumb" muted playsinline preload="metadata"></video>':'<img class="sthumb" alt="">'}
+    <div style="min-width:0"><div class="meta"><span class="pos">シーン${i+1}</span><span class="pill">${isV?"動画":"写真"}</span>${i===0?'<span class="pill next">つかみ</span>':""}</div>
+      <div class="grid2">
+        <div><label for="sm-${i}">素材</label><select id="sm-${i}"></select></div>
+        ${isV?`<div><label for="ss-${i}">開始（秒）</label><input type="number" id="ss-${i}" step="0.1" min="0"></div><div><label for="se-${i}">終了（秒）</label><input type="number" id="se-${i}" step="0.1" min="0"></div>`
+             :`<div><label for="sd-${i}">長さ（秒）</label><input type="number" id="sd-${i}" step="0.5" min="1" max="10"></div><div><label for="mo-${i}">動き</label><select id="mo-${i}"></select></div>`}
+      </div>
+      <label for="st-${i}">字幕（28字以内がおすすめ）</label><textarea id="st-${i}" rows="2"></textarea>
+      <div class="actions"><button data-a="up" ${i===0?"disabled":""} aria-label="前へ">↑</button><button data-a="down" ${i===reel.scenes.length-1?"disabled":""} aria-label="後ろへ">↓</button><button class="danger" data-a="del">削除</button></div>
+    </div>`;
+    const th=c.querySelector(".sthumb"); th.src=(m.url||"")+(isV?`#t=${sc.start||0}`:"");
+    const ms=c.querySelector(`#sm-${i}`); reel.media.forEach(x=>{const o=document.createElement("option");o.value=x.id;o.textContent=`${x.id}（${x.type==="video"?"動画":"写真"}）`;ms.append(o)}); ms.value=sc.media;
+    ms.onchange=()=>{const nm=reel.media.find(x=>x.id===ms.value);reel.scenes[i]=normScene({media:ms.value,text:sc.text,...(nm.type==="video"?{start:0,end:3}:{duration:3})});renderScenes()};
+    const st=c.querySelector(`#st-${i}`); st.value=sc.text; st.oninput=()=>sc.text=st.value;
+    if(isV){const a=c.querySelector(`#ss-${i}`),b=c.querySelector(`#se-${i}`);a.value=sc.start;b.value=sc.end;if(m.duration){a.max=m.duration;b.max=m.duration}
+      a.onchange=()=>{sc.start=Math.max(0,+a.value||0);if(sc.end<=sc.start)sc.end=sc.start+1;renderScenes()};b.onchange=()=>{sc.end=Math.max(sc.start+0.5,+b.value||0);renderScenes()}}
+    else{const d=c.querySelector(`#sd-${i}`),mo=c.querySelector(`#mo-${i}`);d.value=sc.duration;Object.entries(MOTIONS).forEach(([k,v])=>{const o=document.createElement("option");o.value=k;o.textContent=v;mo.append(o)});mo.value=sc.motion;
+      d.onchange=()=>{sc.duration=Math.min(10,Math.max(1,+d.value||3));renderScenes()};mo.onchange=()=>sc.motion=mo.value}
+    c.querySelector("[data-a=up]").onclick=()=>{[reel.scenes[i-1],reel.scenes[i]]=[reel.scenes[i],reel.scenes[i-1]];renderScenes()};
+    c.querySelector("[data-a=down]").onclick=()=>{[reel.scenes[i+1],reel.scenes[i]]=[reel.scenes[i],reel.scenes[i+1]];renderScenes()};
+    c.querySelector("[data-a=del]").onclick=()=>{reel.scenes.splice(i,1);renderScenes()};
+    box.append(c);
+  });
+}
+$("#sceneAdd").onclick=()=>{reel.scenes.push(normScene({media:reel.media[0].id}));renderScenes()};
+$("#reelCaption").oninput=e=>{if(reel)reel.caption=e.target.value};
+async function saveReel(){await commit({[`reels/${reel.id}/plan.json`]:textToB64(JSON.stringify(planData(),null,2)+"\n")},"reel edit: "+reel.id)}
+$("#reelSave").onclick=()=>guard(async()=>{await saveReel();banner("編集案を保存しました","ok")});
+$("#reelBack").onclick=()=>{reel=null;$("#reelEdit").hidden=true;$("#reelStart").hidden=false;guard(loadReelDrafts)};
+$("#reelRender").onclick=()=>guard(async()=>{
+  if(!reel.scenes.length){banner("シーンがありません");return}
+  await saveReel();
+  await runWorkflow("reel.yml",{id:reel.id},"リールを作っています（1〜3分）…");
+  const q=await gh(`/contents/queue/reel_${reel.id}.mp4?ref=${BR}`,{allow404:true});
+  if(q){$("#reelPreview").innerHTML=`<p class="small" style="margin:16px 0 0">完成したリール（投稿待ちに入りました）：</p><video class="reelvideo" controls playsinline muted></video>`;
+    $("#reelPreview video").src=await playableURL(q.download_url+"?v="+q.sha.slice(0,7),q.name);
+    banner("リールができ、投稿待ちに入りました。直したい場合は編集して、もう一度「動画を作る」を押すと作り直されます","ok")}
+});
+async function loadReelDrafts(){
+  const list=(await gh("/contents/reels?ref="+BR,{allow404:true})||[]).filter(f=>f.type==="dir").sort((a,b)=>b.name.localeCompare(a.name));
+  const box=$("#reelDrafts"); box.innerHTML="";
+  if(!list.length){box.textContent="まだありません。";return}
+  for(const d of list.slice(0,15)){
+    const row=document.createElement("div"); row.className="row"; row.style.cssText="justify-content:space-between;border-bottom:1px solid var(--line);padding:8px 0";
+    const label=`${d.name.slice(0,4)}/${d.name.slice(4,6)}/${d.name.slice(6,8)} ${d.name.slice(8,10)}:${d.name.slice(10,12)} 作成`;
+    row.innerHTML=`<span class="mono"></span><button>開く</button>`; row.querySelector("span").textContent=label;
+    row.querySelector("button").onclick=()=>guard(()=>openSavedReel(d.name)); box.append(row);
+  }
+}
+async function openSavedReel(id){
+  const plan=JSON.parse(await readText(`reels/${id}/plan.json`));
+  const files=await gh(`/contents/reels/${id}/media?ref=${BR}`,{allow404:true})||[];
+  if(!files.length){banner("このリールは投稿済みのため、素材が削除されています");return}
+  const urls=Object.fromEntries(files.map(f=>[f.name,f.download_url]));
+  banner("素材を読み込んでいます…");
+  const media=[]; for(const m of plan.media) media.push({...m,url:m.type==="video"?await playableURL(urls[m.file],m.file):urls[m.file]});
+  reel={...plan,id,media}; banner("");
+  openReelEditor();
+}
+
 /* ---------- Tabs & start ---------- */
 function showTab(t){
   document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===t));
@@ -987,6 +1231,7 @@ function showTab(t){
   if(t==="style"&&!cfg) guard(loadConfig);
   if(t==="history") guard(loadHistory);
   if(t==="papers") showPaperSetup();
+  if(t==="reel") showReel();
 }
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $("#tokenSave").onclick=async()=>{

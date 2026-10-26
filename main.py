@@ -40,6 +40,12 @@ LOG = ROOT / "posted_log.csv"
 STATE = ROOT / ".state.json"
 JST = timezone(timedelta(hours=9))
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+VID_EXT = {".mp4", ".mov"}
+MEDIA_EXT = IMG_EXT | VID_EXT
+
+
+def is_video(p: Path) -> bool:
+    return p.suffix.lower() in VID_EXT
 
 
 def load_config():
@@ -58,7 +64,7 @@ def queue_images():
     """投稿順に並べた queue/ 内の画像一覧（order.txt 優先、残りはファイル名順）"""
     if not QUEUE.exists():
         return []
-    images = {p.name: p for p in QUEUE.iterdir() if p.suffix.lower() in IMG_EXT}
+    images = {p.name: p for p in QUEUE.iterdir() if p.suffix.lower() in MEDIA_EXT}
     ordered = []
     order_file = QUEUE / "order.txt"
     if order_file.exists():
@@ -304,6 +310,9 @@ def cmd_prepare(cfg):
     if not img:
         print("queue/ に投稿待ちの画像はありません")
         return
+    if is_video(img):
+        print(f"次はリール（動画）のため画像整形は不要: {img.name}")
+        return
     out = fit_for_instagram(img, PUBLIC / (img.stem + ".jpg"))
     STATE.write_text(json.dumps({"source": img.name, "prepared": out.name}, ensure_ascii=False))
     print(f"整形完了: {img.name} → public/{out.name}")
@@ -314,6 +323,8 @@ def cmd_publish(cfg, dry_run=False):
     if not img:
         print("queue/ に投稿待ちの画像はありません")
         return
+    if is_video(img):
+        return publish_reel(cfg, img, memo, dry_run)
     prepared = PUBLIC / (img.stem + ".jpg")
     if not prepared.exists():
         fit_for_instagram(img, prepared)
@@ -359,6 +370,70 @@ def cmd_publish(cfg, dry_run=False):
     print(f"投稿完了 media_id={media_id}")
 
 
+def pages_url(path: Path) -> str:
+    """GitHub Pages のURL（動画は正しい形式で配信されるためこちらを使う）"""
+    owner, repo = env("GITHUB_REPOSITORY").split("/")
+    return f"https://{owner.lower()}.github.io/{repo}/{path.relative_to(ROOT).as_posix()}"
+
+
+def wait_public(url, minutes=6):
+    for _ in range(minutes * 6):
+        try:
+            if requests.head(url, timeout=20, allow_redirects=True).status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(10)
+    return False
+
+
+def publish_reel(cfg, video: Path, memo, dry_run=False):
+    cap_file = caption_path(video)
+    caption = cap_file.read_text(encoding="utf-8").strip() if cap_file.exists() else ""
+    if not caption:
+        caption = (memo.read_text(encoding="utf-8").strip() if memo else "") + "\n\n" + " ".join(cfg.get("fixed_hashtags", []))
+    caption = caption.strip()[:2200]
+    print("=" * 40); print(f"リール: {video.name}"); print("-" * 40); print(caption); print("=" * 40)
+    if dry_run:
+        print("[dry-run] 投稿はしていません")
+        return
+    url = pages_url(video)
+    if not wait_public(url):
+        notify(f"⚠️ リールの公開URLが準備できませんでした: {video.name}")
+        raise RuntimeError("動画の公開URLにアクセスできません（GitHub Pagesの反映待ち）。次回に再試行されます")
+    base, uid, token = graph_base(cfg), env("IG_USER_ID"), env("IG_ACCESS_TOKEN")
+    try:
+        c = ig_call("POST", f"{base}/{uid}/media", media_type="REELS", video_url=url, caption=caption,
+                    share_to_feed="true", access_token=token)
+        cid = c["id"]
+        for _ in range(60):  # 最大約10分
+            st = ig_call("GET", f"{base}/{cid}", fields="status_code,status", access_token=token)
+            if st.get("status_code") == "FINISHED":
+                break
+            if st.get("status_code") == "ERROR":
+                raise RuntimeError(f"Instagram側で動画処理に失敗しました: {st.get('status')}")
+            time.sleep(10)
+        else:
+            raise RuntimeError("動画処理がタイムアウトしました")
+        media_id = ig_call("POST", f"{base}/{uid}/media_publish", creation_id=cid, access_token=token)["id"]
+    except Exception as e:
+        notify(f"⚠️ リールの投稿に失敗: {video.name}\n{e}")
+        raise
+    POSTED.mkdir(exist_ok=True)
+    shutil.move(str(video), POSTED / video.name)
+    if memo:
+        shutil.move(str(memo), POSTED / memo.name)
+    cap_file.unlink(missing_ok=True)
+    (POSTED / (video.stem + "_caption.txt")).write_text(caption, encoding="utf-8")
+    order_file = QUEUE / "order.txt"
+    if order_file.exists():
+        rest = [l for l in order_file.read_text(encoding="utf-8").splitlines() if l.strip() and l.strip() != video.name]
+        order_file.write_text("\n".join(rest) + ("\n" if rest else ""), encoding="utf-8")
+    write_log(video.name, media_id, caption)
+    notify(f"✅ リールを投稿しました: {video.name}")
+    print(f"投稿完了 media_id={media_id}")
+
+
 def cmd_draft(cfg, only=None, force=False):
     """queue内の写真にAI下書き（〇〇.caption.txt）を作る"""
     images = queue_images()
@@ -371,6 +446,8 @@ def cmd_draft(cfg, only=None, force=False):
     tmp.mkdir(exist_ok=True)
     made = 0
     for img in images:
+        if is_video(img):
+            continue
         cap = caption_path(img)
         if cap.exists() and not force:
             continue
