@@ -182,6 +182,7 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
             <label for="composeN" style="margin-top:0">作る数</label>
             <select id="composeN"><option>1</option><option selected>3</option><option>5</option></select>
           </div>
+          <label class="row" style="margin:0;gap:6px;color:var(--fg);font-size:.88rem"><input type="checkbox" id="useIllust" checked> イラストを入れる</label>
           <button class="primary" id="composeBtn">下書きを作る</button>
         </div>
         <div id="composeList" class="list"></div>
@@ -785,7 +786,8 @@ ${drafts.length||k?`【既に作った投稿の見出し（重複を避ける）
       const use=(j.use||[]).filter(id=>p.findings.some(f=>f.id===id));
       taken[p._file]=[...(taken[p._file]||[]),...use];
       const d={paper:p._file,cite:citeOf(p),use,headline:j.headline||"",points:(j.points||[]).slice(0,4),chart:validChart(j.chart),caption:(j.caption||"").trim(),on:true};
-      d.img=drawCard(d); drafts.push(d); renderDrafts();
+      if($("#useIllust").checked){banner(`イラストを描いています ${k+1}/${n}…`); try{d.svg=await makeIllustration(d)}catch(e){console.warn(e)}}
+      d.img=await drawCard(d); drafts.push(d); renderDrafts();
     }catch(e){console.error(e);banner(aiErr(e),"err");return}
   }
   banner("下書きができました。画像と文章を確認し、必要なら直してから追加してください","ok");
@@ -812,49 +814,84 @@ function wrapText(ctx,text,maxW){
   }
   if(line) lines.push(line); return lines;
 }
-function drawCard(d){
-  const W=1080,H=1350,P=84,cv=document.createElement("canvas"); cv.width=W; cv.height=H;
-  const ctx=cv.getContext("2d");
-  for(let s=1;s>=0.6;s-=0.05){
+const ILLUST_PALETTE=["#f1f3ec","#dfe5d8","#2d5737","#7fa36b","#c4871a","#e9c46a","#17201a","#ffffff","#a8c3a0","#8a6a3b"];
+const ILLUST_SYS=`あなたは科学コミュニケーション用のイラストレーターです。研究の話題に合う、シンプルで温かみのある平面イラストをSVGで描きます。
+厳守：
+- <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" width="1080" height="700"> で始め、最初に全面の背景の<rect>を置く
+- 使う色はこのパレットのみ：${ILLUST_PALETTE.join(" ")}
+- 平面的な図形（circle, ellipse, rect, path, polygon）で描く。グラデーション・影・フィルター・画像・外部参照・<text>・文字・数字・記号は使わない
+- 主題を1つ大きく、背景に植物・巣箱・空などを控えめに。余白を十分に取る
+- 昆虫を描く場合は、頭・胸・腹の3部分、脚6本は胸から、翅は2対（4枚）。正確さを優先し、誇張した顔や表情は付けない
+- 論文の数値やグラフは描かない（文字は別に載せるため）。話題の雰囲気を象徴的に表す
+- 全体で12000文字以内
+出力はSVGコードのみ。説明は不要。`;
+async function claudeText(content,system,maxTokens=8000){
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{
+    "x-api-key":AK,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:maxTokens,system,messages:[{role:"user",content}]})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const e=new Error((d.error&&d.error.message)||r.statusText);e.status=r.status;e.ai=true;throw e}
+  return (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+}
+function cleanSvg(t){
+  const m=t.match(/<svg[\s\S]*<\/svg>/i); if(!m) return null;
+  let svg=m[0].replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<text[\s\S]*?<\/text>/gi,"").replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi,"")
+    .replace(/<image[^>]*>/gi,"").replace(/\son\w+="[^"]*"/gi,"").replace(/(xlink:)?href="(?!#)[^"]*"/gi,"");
+  if(!/xmlns=/.test(svg)) svg=svg.replace(/<svg/i,'<svg xmlns="http://www.w3.org/2000/svg"');
+  if(!/\swidth=/.test(svg.slice(0,300))) svg=svg.replace(/<svg/i,'<svg width="1080" height="700"');
+  return svg;
+}
+async function makeIllustration(d){
+  if(!cfg) await loadConfig();
+  const t=await claudeText(`話題：${d.headline}\n内容：${d.points.join(" / ")}\nこの話題のイラストを描いてください。`,ILLUST_SYS);
+  return cleanSvg(t);
+}
+function svgImage(svg){
+  return new Promise((res,rej)=>{const img=new Image();const url=URL.createObjectURL(new Blob([svg],{type:"image/svg+xml"}));
+    img.onload=()=>{res(img)};img.onerror=()=>rej(new Error("イラストを表示できませんでした"));img.src=url});
+}
+/* 1080x1350 図解カード（イラストがあれば上部に） */
+async function drawCard(d){
+  const W=1080,H=1350,P=80,IH=700,cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"); ctx.textBaseline="top";
+  let ill=null; if(d.svg&&d.useIllust!==false){try{ill=await svgImage(d.svg)}catch(e){console.warn(e)}}
+  for(let s=1.35;s>=0.6;s-=0.05){
     ctx.fillStyle=CARD.bg; ctx.fillRect(0,0,W,H);
-    // 上部ラベル
-    ctx.fillStyle=CARD.green; ctx.fillRect(0,0,W,18);
-    ctx.font=`700 30px ${CF}`; ctx.fillStyle=CARD.green; ctx.textBaseline="top";
-    ctx.fillText("論文を、やさしく。",P,P-8);
-    let y=P+70;
-    // 見出し
-    const hs=Math.round(66*s); ctx.font=`700 ${hs}px ${CF}`; ctx.fillStyle=CARD.ink;
-    for(const l of wrapText(ctx,d.headline,W-2*P)){ctx.fillText(l,P,y); y+=Math.round(hs*1.36)}
-    y+=18; ctx.fillStyle=CARD.honey; ctx.fillRect(P,y,120,8); y+=48;
-    // 要点
-    const ps=Math.round(38*s); ctx.font=`400 ${ps}px ${CF}`;
-    for(const pt of d.points){
-      ctx.fillStyle=CARD.honey; ctx.beginPath(); ctx.arc(P+10,y+ps*0.6,9,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle=CARD.ink;
-      for(const l of wrapText(ctx,pt,W-2*P-44)){ctx.fillText(l,P+44,y); y+=Math.round(ps*1.55)}
-      y+=Math.round(ps*0.55);
+    let y;
+    if(ill){
+      ctx.drawImage(ill,0,0,W,IH);
+      y=IH+44; ctx.font=`700 26px ${CF}`; ctx.fillStyle=CARD.green; ctx.fillText("論文を、やさしく。",P,y); y+=52;
+    }else{
+      ctx.fillStyle=CARD.green; ctx.fillRect(0,0,W,18);
+      ctx.font=`700 30px ${CF}`; ctx.fillStyle=CARD.green; ctx.fillText("論文を、やさしく。",P,P-8); y=P+70;
     }
-    // グラフ
-    if(d.chart){
-      y+=10; const c=d.chart, rowH=Math.round(62*s), labW=300, max=Math.max(...c.values)||1;
+    const hs=Math.round((ill?54:66)*s); ctx.font=`700 ${hs}px ${CF}`; ctx.fillStyle=CARD.ink;
+    for(const l of wrapText(ctx,d.headline,W-2*P)){ctx.fillText(l,P,y); y+=Math.round(hs*1.34)}
+    y+=Math.round(14*s); ctx.fillStyle=CARD.honey; ctx.fillRect(P,y,110,7); y+=Math.round(36*s);
+    const ps=Math.round((ill?31:38)*s); ctx.font=`400 ${ps}px ${CF}`;
+    for(const pt of d.points){
+      ctx.fillStyle=CARD.honey; ctx.beginPath(); ctx.arc(P+9,y+ps*0.6,Math.max(5,ps*0.22),0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=CARD.ink;
+      for(const l of wrapText(ctx,pt,W-2*P-40)){ctx.fillText(l,P+40,y); y+=Math.round(ps*1.5)}
+      y+=Math.round(ps*0.45);
+    }
+    if(d.chart&&!ill){
+      y+=10; const c=d.chart, rowH=Math.round(62*s), labW=300, max=Math.max(...c.values)||1, trackW=W-2*P-labW-150;
       ctx.font=`700 ${Math.round(30*s)}px ${CF}`; ctx.fillStyle=CARD.muted; ctx.fillText(c.title+(c.unit?`（${c.unit}）`:""),P,y); y+=Math.round(52*s);
-      ctx.font=`400 ${Math.round(30*s)}px ${CF}`;
       c.labels.forEach((lb,i)=>{
-        const bw=(W-2*P-labW-150)*(c.values[i]/max);
-        ctx.fillStyle=CARD.ink; ctx.fillText(wrapText(ctx,lb,labW-20)[0]||"",P,y+8);
-        ctx.fillStyle=CARD.soft; ctx.fillRect(P+labW,y,W-2*P-labW-150,rowH-18);
+        const bw=trackW*(c.values[i]/max);
+        ctx.font=`400 ${Math.round(30*s)}px ${CF}`; ctx.fillStyle=CARD.ink; ctx.fillText(wrapText(ctx,lb,labW-20)[0]||"",P,y+8);
+        ctx.fillStyle=CARD.soft; ctx.fillRect(P+labW,y,trackW,rowH-18);
         ctx.fillStyle=CARD.bar; ctx.fillRect(P+labW,y,Math.max(4,bw),rowH-18);
         ctx.fillStyle=CARD.ink; ctx.font=`700 ${Math.round(30*s)}px ${CF}`;
-        ctx.fillText(c.values[i].toLocaleString("ja-JP")+(c.unit||""),W-P-136,y+8);
-        ctx.font=`400 ${Math.round(30*s)}px ${CF}`; y+=rowH;
+        ctx.fillText(c.values[i].toLocaleString("ja-JP")+(c.unit||""),W-P-136,y+8); y+=rowH;
       });
     }
-    // 出典（下部）
-    ctx.font=`400 24px ${CF}`; const cl=wrapText(ctx,"出典："+d.cite,W-2*P).slice(0,3);
-    const fy=H-P-cl.length*36;
-    if(y<=fy-30||s<=0.62){
-      ctx.fillStyle=CARD.soft; ctx.fillRect(P,fy-26,W-2*P,2);
-      ctx.fillStyle=CARD.muted; cl.forEach((l,i)=>ctx.fillText(l,P,fy+i*36));
+    ctx.font=`400 22px ${CF}`; const cl=wrapText(ctx,"出典："+d.cite,W-2*P).slice(0,3);
+    const fy=H-60-cl.length*32;
+    if(y<=fy-24||s<=0.62){
+      ctx.fillStyle=CARD.soft; ctx.fillRect(P,fy-22,W-2*P,2);
+      ctx.fillStyle=CARD.muted; cl.forEach((l,i)=>ctx.fillText(l,P,fy+i*32));
       break;
     }
   }
@@ -871,14 +908,18 @@ function renderDrafts(){
         <label for="dh-${i}">画像の見出し</label><input type="text" id="dh-${i}">
         <label for="dp-${i}">画像の要点（1行に1つ）</label><textarea id="dp-${i}" rows="3"></textarea>
         <label for="dc-${i}">投稿文</label><textarea id="dc-${i}" class="cap"></textarea>
-        <div class="actions"><button data-a="redraw">画像を作り直す</button></div>
+        <label class="row" style="margin:10px 0 0;gap:6px;color:var(--fg);font-size:.88rem"><input type="checkbox" class="ill"> イラストを入れる</label>
+        <div class="actions"><button data-a="redraw">文字を反映</button><button data-a="reillust">イラストを描き直す</button></div>
       </div>`;
     c.querySelector("img").src=d.img; c.querySelector(".cite").className="fname"; c.querySelector(".fname").textContent="出典："+d.cite;
     const on=c.querySelector(".on"); on.checked=d.on; on.onchange=()=>d.on=on.checked;
     const h=c.querySelector(`#dh-${i}`), p=c.querySelector(`#dp-${i}`), cap=c.querySelector(`#dc-${i}`);
     h.value=d.headline; p.value=d.points.join("\n"); cap.value=d.caption;
     h.oninput=()=>d.headline=h.value; p.oninput=()=>d.points=p.value.split("\n").map(s=>s.trim()).filter(Boolean); cap.oninput=()=>d.caption=cap.value;
-    c.querySelector("[data-a=redraw]").onclick=()=>{d.img=drawCard(d);c.querySelector("img").src=d.img};
+    const ill=c.querySelector(".ill"); ill.checked=!!d.svg&&d.useIllust!==false;
+    ill.onchange=()=>guard(async()=>{d.useIllust=ill.checked; if(ill.checked&&!d.svg){banner("イラストを描いています…");d.svg=await makeIllustration(d)} d.img=await drawCard(d);c.querySelector("img").src=d.img;banner("")});
+    c.querySelector("[data-a=redraw]").onclick=()=>guard(async()=>{d.img=await drawCard(d);c.querySelector("img").src=d.img});
+    c.querySelector("[data-a=reillust]").onclick=()=>guard(async()=>{banner("イラストを描き直しています…");try{d.svg=await makeIllustration(d);d.useIllust=true;ill.checked=true;d.img=await drawCard(d);c.querySelector("img").src=d.img;banner("描き直しました","ok")}catch(e){banner(aiErr(e),"err")}});
     box.append(c);
   });
   $("#composeBar").hidden=!drafts.length;
@@ -889,8 +930,8 @@ $("#composeAdd").onclick=()=>guard(async()=>{
   await loadQueue();
   const ts=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
   const ch={}, names=[], usedBy={};
+  for(const d of sel) d.img=await drawCard(d);
   sel.forEach((d,i)=>{
-    d.img=drawCard(d);
     const name=`paper_${ts}_${String(i+1).padStart(2,"0")}.jpg`, stem=stemOf(name);
     ch["queue/"+name]=d.img.split(",")[1];
     ch["queue/"+stem+".caption.txt"]=textToB64(d.caption.trim()+"\n");
