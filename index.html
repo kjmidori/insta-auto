@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
 <style>
 /* Layout: one narrow work column; queue cards stack in posting order, the next post is marked with a honey stripe */
 :root{
@@ -89,6 +90,7 @@ a{color:var(--accent)}
 .reelvideo{width:100%;max-width:300px;aspect-ratio:9/16;border-radius:8px;background:#000;display:block;margin-top:12px}
 fieldset.ov{border:1px solid var(--line);border-radius:8px;padding:4px 12px 12px;margin:12px 0 0;min-width:0}
 fieldset.ov legend{padding:0 6px}
+.grid2in{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
 h2.sec{font-size:1rem;margin:26px 0 8px;letter-spacing:.02em}
 select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
 .paper h3{font-size:.98rem;margin:0 0 2px;text-wrap:balance}
@@ -171,10 +173,23 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
       <div id="paperWork" hidden>
         <h2 class="sec">1. 論文を読み込む</h2>
         <div class="drop" id="pdfDrop">
-          <p style="margin:0 0 10px">論文PDFをここにドラッグ、または</p>
-          <label class="btn" for="pdfInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">PDFを選ぶ（複数可）</label>
-          <input type="file" id="pdfInput" accept="application/pdf" multiple hidden>
-          <p class="small" style="margin:10px 0 0">1本30秒〜1分。PDFそのものは保存されず、AIが抜き出した「知見」だけが残ります（100ページ・32MBまで）。</p>
+          <p style="margin:0 0 10px">論文のファイルをここにドラッグ、または</p>
+          <label class="btn" for="pdfInput" style="display:inline-block;color:var(--fg);font-size:.9rem;margin:0;cursor:pointer">ファイルを選ぶ（複数可）</label>
+          <input type="file" id="pdfInput" accept="application/pdf,image/*,.docx,.txt,.md,text/plain" multiple hidden>
+          <p class="small" style="margin:10px 0 0">PDF・Word（.docx）・テキストは1ファイル＝1本の論文。<b>写真・スクリーンショットは、一度に選んだものをまとめて1本の論文</b>として読みます（ページ順はファイル名順・20枚まで）。1本30秒〜1分。元のファイルは保存されず、AIが抜き出した「知見」だけが残ります。</p>
+        </div>
+        <div class="grid2in" style="margin-top:14px">
+          <div>
+            <label for="urlInput" style="margin-top:0">論文のページのアドレス（URL）</label>
+            <input type="text" id="urlInput" inputmode="url" placeholder="https://pmc.ncbi.nlm.nih.gov/articles/...">
+            <div class="actions"><button id="urlBtn">URLから読み込む</button></div>
+            <p class="small" style="margin:4px 0 0">無料公開のページ（PMC、J-STAGEなど）のみ。有料・ログインが必要なページは読めません。</p>
+          </div>
+          <div>
+            <label for="pasteInput" style="margin-top:0">文章を貼り付けて読み込む</label>
+            <textarea id="pasteInput" rows="4" placeholder="タイトル・著者・雑誌名・年も一緒に貼り付けてください（出典に使います）"></textarea>
+            <div class="actions"><button id="pasteBtn">貼り付けた文章を読み込む</button></div>
+          </div>
         </div>
         <div id="pdfStatus" class="small" style="margin-top:8px"></div>
 
@@ -674,16 +689,23 @@ async function uploadWithAI(){
 /* ---------- Papers: Claude (browser direct) ---------- */
 let AK=""; try{AK=localStorage.getItem("anthropicKey")||""}catch(e){}
 let papers=[]; let drafts=[];
-async function claude(content,system,maxTokens=4000){
+async function claude(content,system,maxTokens=4000,opt={}){
   if(!cfg) await loadConfig();
-  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{
-    "x-api-key":AK,"anthropic-version":"2023-06-01","content-type":"application/json",
-    "anthropic-dangerous-direct-browser-access":"true"},
-    body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:maxTokens,system,messages:[{role:"user",content}]})});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok){const e=new Error((d.error&&d.error.message)||r.statusText);e.status=r.status;e.ai=true;throw e}
-  const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-  const m=text.match(/\{[\s\S]*\}/); if(!m) throw new Error("AIの返答を読み取れませんでした");
+  const headers={"x-api-key":AK,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
+  if(opt.beta) headers["anthropic-beta"]=opt.beta;
+  const messages=[{role:"user",content}]; let d;
+  for(let turn=0;turn<4;turn++){
+    const body={model:cfg.model||"claude-sonnet-5-5",max_tokens:maxTokens,system,messages};
+    if(opt.tools) body.tools=opt.tools;
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers,body:JSON.stringify(body)});
+    d=await r.json().catch(()=>({}));
+    if(!r.ok){const e=new Error((d.error&&d.error.message)||r.statusText);e.status=r.status;e.ai=true;throw e}
+    if(d.stop_reason!=="pause_turn") break;
+    messages.push({role:"assistant",content:d.content});   // 長いWeb取得の途中なら続けさせる
+  }
+  const texts=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text);
+  const last=[...texts].reverse().find(t=>t.includes("{"))||texts.join("");
+  const m=last.match(/\{[\s\S]*\}/); if(!m) throw new Error("AIの返答を読み取れませんでした");
   return JSON.parse(m[0]);
 }
 function aiErr(e){
@@ -713,7 +735,14 @@ function renderPapers(){
     c.innerHTML=`<div style="min-width:0"><h3></h3><div class="cite"></div>
       <div class="meta" style="margin-top:6px"><span class="pill has">知見 ${p.findings.length}件</span><span class="pill">未使用 ${unused}件</span></div>
       <p class="small sum" style="margin:6px 0 0"></p>
-      <details><summary>知見を確認・修正する</summary>
+      <details><summary>知見と出典を確認・修正する</summary>
+        <div class="grid2in" style="gap:0 12px">
+          <div><label for="pt-${i}">タイトル</label><input type="text" id="pt-${i}"></div>
+          <div><label for="pa-${i}">著者（例：Yoshida T, et al.）</label><input type="text" id="pa-${i}"></div>
+          <div><label for="py-${i}">年</label><input type="text" id="py-${i}"></div>
+          <div><label for="pj-${i}">雑誌名・巻号・ページ</label><input type="text" id="pj-${i}"></div>
+          <div><label for="pd-${i}">DOI（任意）</label><input type="text" id="pd-${i}"></div>
+        </div>
         <label for="pf-${i}">知見（1行に1つ。投稿はこの内容だけから作られます）</label>
         <textarea id="pf-${i}" rows="10"></textarea>
         <label for="pl-${i}">研究の限界・注意点</label>
@@ -724,6 +753,8 @@ function renderPapers(){
     c.querySelector("h3").textContent=p.title; c.querySelector(".cite").textContent=citeOf(p);
     c.querySelector(".sum").textContent=p.summary||"";
     c.querySelector(`#pf-${i}`).value=p.findings.map(f=>f.text).join("\n");
+    c.querySelector(`#pt-${i}`).value=p.title||""; c.querySelector(`#pa-${i}`).value=p.authors||""; c.querySelector(`#py-${i}`).value=p.year||"";
+    c.querySelector(`#pj-${i}`).value=p.journal||""; c.querySelector(`#pd-${i}`).value=p.doi||"";
     c.querySelector(`#pl-${i}`).value=p.limitations||"";
     c.addEventListener("click",e=>{const a=e.target.dataset.a;if(!a)return;
       if(a==="del"){c.querySelector(".confirm").hidden=false;return}
@@ -734,6 +765,8 @@ function renderPapers(){
           if(a==="save"){
             const lines=c.querySelector(`#pf-${i}`).value.split("\n").map(s=>s.trim()).filter(Boolean);
             p.findings=lines.map((t,k)=>({id:"f"+(k+1),text:t})); p.limitations=c.querySelector(`#pl-${i}`).value.trim();
+            p.title=c.querySelector(`#pt-${i}`).value.trim()||p.title; p.authors=c.querySelector(`#pa-${i}`).value.trim();
+            p.year=c.querySelector(`#py-${i}`).value.trim(); p.journal=c.querySelector(`#pj-${i}`).value.trim(); p.doi=c.querySelector(`#pd-${i}`).value.trim();
             p.used=p.used.filter(id=>p.findings.some(f=>f.id===id));
           }
           if(a==="reset") p.used=[];
@@ -752,7 +785,9 @@ async function savePaper(p,msg="paper edit"){
   const {_file,...data}=p; await commit({["papers/"+_file]:textToB64(JSON.stringify(data,null,2)+"\n")},msg);
 }
 
-const INGEST_SYS=`あなたは研究論文を正確に読み取る研究アシスタントです。渡された論文PDFの内容だけを根拠に、一般向け発信の素材となる「知見」を抽出します。
+const INGEST_SYS=`あなたは研究論文を正確に読み取る研究アシスタントです。渡された論文（PDF・画像・文章・Webページのいずれか）の内容だけを根拠に、一般向け発信の素材となる「知見」を抽出します。
+- 渡された内容が研究論文（またはその要旨）でない、読み取れない、本文が取得できない場合は {"error":"理由（日本語で短く）"} だけを返す
+- タイトル・著者・年・雑誌名が内容から確認できない項目は空にする（推測で埋めない）
 厳守：
 - 論文に書かれていないこと、一般論、推測を加えない。数値・対象・条件・地域・期間は論文の記載どおりに書く
 - 知見は日本語で、1つずつ独立して読める具体的な一文（〜50〜120字）。原文の長い直訳・引用はしない
@@ -764,26 +799,71 @@ const INGEST_SYS=`あなたは研究論文を正確に読み取る研究アシ�
 async function ingest(file){
   if(file.size>32*1024*1024) throw new Error(file.name+" は32MBを超えています");
   const b64=bytesToB64(new Uint8Array(await file.arrayBuffer()));
-  const j=await claude([{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:"この論文から知見を抽出してください。"}],INGEST_SYS,6000);
+  return ingestBlocks([{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}}],file.name);
+}
+async function ingestBlocks(blocks,label,opt={}){
+  const j=await claude([...blocks,{type:"text",text:opt.instruction||"この論文から知見を抽出してください。"}],INGEST_SYS,6000,opt);
+  if(j.error) throw new Error(j.error);
+  const file={name:label};
   const id=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14)+"_"+Math.random().toString(36).slice(2,6);
   const p={title:j.title_ja?`${j.title_ja}`:j.title,title_original:j.title||"",authors:j.authors||"",year:String(j.year||""),journal:j.journal||"",doi:j.doi||"",
     summary:j.summary||"",findings:(j.findings||[]).map((t,k)=>({id:"f"+(k+1),text:String(t)})),limitations:j.limitations||"",used:[],added:new Date().toISOString(),source_file:file.name,_file:id+".json"};
+  p.title=p.title||"（タイトル不明）";
   if(!p.findings.length) throw new Error(file.name+" から知見を抽出できませんでした");
   await savePaper(p,"paper add: "+p.title.slice(0,40));
+  if(!p.authors||!p.year) setTimeout(()=>banner(`「${p.title.slice(0,30)}」は著者や年が読み取れませんでした。出典が正しく書けないため、下の一覧で確認してください`,"err"),50);
+}
+async function imageBlock(f){
+  const b=await createImageBitmap(f,{imageOrientation:"from-image"}), s=Math.min(1,1568/Math.max(b.width,b.height));
+  const c=document.createElement("canvas"); c.width=Math.round(b.width*s); c.height=Math.round(b.height*s); c.getContext("2d").drawImage(b,0,0,c.width,c.height);
+  return {type:"image",source:{type:"base64",media_type:"image/jpeg",data:c.toDataURL("image/jpeg",0.88).split(",")[1]}};
+}
+async function textOfFile(f){
+  if(/\.docx$/i.test(f.name)){
+    if(!window.mammoth) throw new Error("Wordファイルを読む部品を読み込めませんでした。再読み込みしてください");
+    return (await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+  }
+  return await f.text();
 }
 async function ingestFiles(fl){
-  const files=[...fl].filter(f=>f.type==="application/pdf"||/\.pdf$/i.test(f.name)); if(!files.length) return;
+  const all=[...fl];
+  const imgs=all.filter(f=>f.type.startsWith("image/")).sort((a,b)=>a.name.localeCompare(b.name,"ja",{numeric:true}));
+  const jobs=[];
+  all.filter(f=>f.type==="application/pdf"||/\.pdf$/i.test(f.name)).forEach(f=>jobs.push({label:f.name,run:()=>ingest(f)}));
+  all.filter(f=>/\.(docx|txt|md)$/i.test(f.name)||f.type==="text/plain").forEach(f=>jobs.push({label:f.name,run:async()=>{
+    const t=(await textOfFile(f)).trim(); if(t.length<200) throw new Error("文章が短すぎます");
+    return ingestBlocks([{type:"text",text:"【論文の文章】\n"+t.slice(0,150000)}],f.name)}}));
+  if(imgs.length){
+    if(imgs.length>20){banner("写真・スクリーンショットは一度に20枚までです","err");return}
+    jobs.push({label:`画像${imgs.length}枚`,run:async()=>{const bl=[];for(const f of imgs){bl.push({type:"text",text:`ページ：${f.name}`});bl.push(await imageBlock(f))}
+      return ingestBlocks(bl,`画像${imgs.length}枚（${imgs[0].name}〜）`,{instruction:"これは1本の論文を撮影・スクリーンショットしたページ画像です（ファイル名順）。この論文から知見を抽出してください。"})}});
+  }
+  runIngestJobs(jobs);
+}
+function runIngestJobs(jobs){
+  if(!jobs.length){banner("読み込める形式のファイルがありません（PDF・Word・テキスト・画像）","err");return}
   guard(async()=>{
     const st=$("#pdfStatus"); let ok=0;
-    for(let i=0;i<files.length;i++){
-      st.textContent=`読み込み中 ${i+1}/${files.length}：${files[i].name}（30秒〜1分）`;
-      try{await ingest(files[i]);ok++}catch(e){console.error(e);banner(files[i].name+"："+aiErr(e),"err")}
+    for(let i=0;i<jobs.length;i++){
+      st.textContent=`読み込み中 ${i+1}/${jobs.length}：${jobs[i].label}（30秒〜1分）`;
+      try{await jobs[i].run();ok++}catch(e){console.error(e);banner(jobs[i].label+"："+aiErr(e),"err")}
     }
     st.textContent=""; if(ok) banner(`${ok}本の論文を読み込みました。下で知見を確認してください`,"ok");
     await loadPapers();
   });
 }
 $("#pdfInput").onchange=e=>{ingestFiles(e.target.files);e.target.value=""};
+$("#urlBtn").onclick=()=>{
+  const u=$("#urlInput").value.trim();
+  if(!/^https?:\/\/\S+$/.test(u)){banner("http から始まるアドレスを入れてください","err");return}
+  runIngestJobs([{label:u,run:async()=>{await ingestBlocks([{type:"text",text:`次のURLの論文ページを web_fetch で読み込んでください：${u}\n本文が取得できない場合（有料・ログイン必須など）は error を返してください。`}],u,
+    {tools:[{type:"web_fetch_20250910",name:"web_fetch",max_uses:3}],beta:"web-fetch-2025-09-10"}); $("#urlInput").value=""}}]);
+};
+$("#pasteBtn").onclick=()=>{
+  const t=$("#pasteInput").value.trim();
+  if(t.length<200){banner("文章が短すぎます。要旨や本文を貼り付けてください","err");return}
+  runIngestJobs([{label:"貼り付けた文章",run:async()=>{await ingestBlocks([{type:"text",text:"【論文の文章】\n"+t.slice(0,150000)}],"貼り付け");$("#pasteInput").value=""}}]);
+};
 const pdrop=$("#pdfDrop");
 pdrop.ondragover=e=>{e.preventDefault();pdrop.classList.add("over")};
 pdrop.ondragleave=()=>pdrop.classList.remove("over");
