@@ -78,6 +78,8 @@ textarea{resize:vertical}
 .setup code,.mono{font-family:var(--f-mono);font-size:.85em}
 .small{font-size:.82rem;color:var(--muted)}
 a{color:var(--accent)}
+fieldset.ov{border:1px solid var(--line);border-radius:8px;padding:4px 12px 12px;margin:12px 0 0;min-width:0}
+fieldset.ov legend{padding:0 6px}
 h2.sec{font-size:1rem;margin:26px 0 8px;letter-spacing:.02em}
 select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
 .paper h3{font-size:.98rem;margin:0 0 2px;text-wrap:balance}
@@ -201,7 +203,7 @@ select{font:inherit;font-size:.92rem;color:var(--fg);background:var(--bg);border
       <div id="newList" class="newgrid"></div>
       <div class="actions" id="uploadBar" hidden>
         <button class="primary" id="uploadBtn">投稿待ちに追加</button>
-        <label class="row small" style="margin:0;gap:6px"><input type="checkbox" id="autoDraft" checked> 追加後にAIで下書きを作る</label>
+        <label class="row small" style="margin:0;gap:6px"><input type="checkbox" id="autoDraft" checked> AIで投稿文と写真の文字を作る（書庫の論文から）</label>
       </div>
     </section>
 
@@ -289,16 +291,20 @@ const stemOf=n=>n.replace(/\.[^.]+$/,"");
 async function loadQueue(){
   const list=await gh("/contents/queue?ref="+BR,{allow404:true})||[];
   const files=Object.fromEntries(list.map(f=>[f.name,f]));
+  const srcList=await gh("/contents/source?ref="+BR,{allow404:true})||[];
+  const srcFiles=Object.fromEntries(srcList.map(f=>[f.name,f]));
   const imgs=list.filter(f=>IMG.test(f.name)).map(f=>f.name);
   const orderTxt=files["order.txt"]?await readText("queue/order.txt"):"";
   const order=(orderTxt||"").split("\n").map(s=>s.trim()).filter(n=>imgs.includes(n));
   const names=[...new Set([...order,...imgs.sort()])];
   items=await Promise.all(names.map(async n=>{
-    const s=stemOf(n), mf=s+".txt", cf=s+".caption.txt";
+    const s=stemOf(n), mf=s+".txt", cf=s+".caption.txt", of=s+".overlay.json";
+    let overlay=null; if(files[of]){try{overlay=JSON.parse(await readText("queue/"+of))}catch(e){}}
     let memo=files[mf]?await readText("queue/"+mf):"", caption=files[cf]?await readText("queue/"+cf):"";
     if(!caption&&memo.trimStart().startsWith("caption:")){caption=memo.trimStart().slice(8).trim();memo=""}
     return {name:n,stem:s,memo:(memo||"").trim(),caption:(caption||"").trim(),src:localPreview[n]||files[n].download_url+"?v="+files[n].sha.slice(0,7),
-      hasMemo:!!files[mf],hasCap:!!files[cf]};
+      hasMemo:!!files[mf],hasCap:!!files[cf],overlay,hasOverlay:!!files[of],
+      source:localSource[n]||(srcFiles[n]?srcFiles[n].download_url+"?v="+srcFiles[n].sha.slice(0,7):null)};
   }));
   renderQueue();
 }
@@ -318,6 +324,13 @@ function renderQueue(){
       <textarea id="m-${i}" rows="2" placeholder="例：群馬の巣箱。今朝は出入りが活発"></textarea>
       <label for="c-${i}">投稿文（この内容がそのまま投稿されます）</label>
       <textarea id="c-${i}" class="cap" placeholder="空欄なら投稿時にAIが書きます"></textarea>
+      <fieldset class="ov">
+        <legend><label class="row" style="margin:0;gap:6px;color:var(--fg)"><input type="checkbox" class="ovOn"> 写真に文字を載せる</label></legend>
+        <label for="oh-${i}">見出し</label><input type="text" id="oh-${i}" class="ovH">
+        <label for="os-${i}">補足（1〜2行）</label><textarea id="os-${i}" rows="2" class="ovS"></textarea>
+        <label for="oc-${i}">出典</label><input type="text" id="oc-${i}" class="ovC">
+        <p class="small ovNote" style="margin:6px 0 0"></p>
+      </fieldset>
       <div class="actions">
         <button class="primary" data-act="save">保存</button>
         <button data-act="redraft">AIで書き直す</button>
@@ -332,6 +345,11 @@ function renderQueue(){
     c.querySelector(".fname").textContent=it.name;
     c.querySelector("textarea[id^=m-]").value=it.memo;
     c.querySelector("textarea[id^=c-]").value=it.caption;
+    if(it.name.startsWith("paper_")) c.querySelector("fieldset.ov").hidden=true;
+    const ov=it.overlay||{};
+    c.querySelector(".ovOn").checked=!!(ov.on&&ov.headline);
+    c.querySelector(".ovH").value=ov.headline||""; c.querySelector(".ovS").value=ov.sub||""; c.querySelector(".ovC").value=ov.cite||"";
+    c.querySelector(".ovNote").textContent=ov.matched===false?"書庫に合う論文が見つからなかったため、文字は載せていません。見出しを入力すれば載せられます。":(ov.use&&ov.use.length?"使った知見："+ov.use.join(", "):"");
     c.addEventListener("click",e=>{const a=e.target.dataset.act;if(a)onAct(a,i,c)});
     box.append(c);
   });
@@ -348,6 +366,12 @@ async function onAct(a,i,card){
       const ch={};
       if(memo) ch["queue/"+it.stem+".txt"]=textToB64(memo+"\n"); else if(it.hasMemo) ch["queue/"+it.stem+".txt"]=null;
       if(cap) ch["queue/"+it.stem+".caption.txt"]=textToB64(cap+"\n"); else if(it.hasCap) ch["queue/"+it.stem+".caption.txt"]=null;
+      const nov={...(it.overlay||{}),on:card.querySelector(".ovOn").checked,headline:card.querySelector(".ovH").value.trim(),
+        sub:card.querySelector(".ovS").value.trim(),cite:card.querySelector(".ovC").value.trim()};
+      const old=it.overlay||{};
+      if(nov.on!==!!old.on||nov.headline!==(old.headline||"")||nov.sub!==(old.sub||"")||nov.cite!==(old.cite||"")){
+        Object.assign(ch,await overlayChanges(it,nov));
+      }
       if(!Object.keys(ch).length){banner("変更はありません");return}
       banner("保存しています…"); await commit(ch,"edit: "+it.name); banner("保存しました","ok"); await loadQueue();
     }
@@ -358,8 +382,20 @@ async function onAct(a,i,card){
     if(a==="delYes"){
       const ch={["queue/"+it.name]:null};
       if(it.hasMemo) ch["queue/"+it.stem+".txt"]=null; if(it.hasCap) ch["queue/"+it.stem+".caption.txt"]=null;
+      if(it.hasOverlay) ch["queue/"+it.stem+".overlay.json"]=null; if(it.source&&!localSource[it.name]) ch["source/"+it.name]=null;
       ch["queue/order.txt"]=orderB64(items.filter(x=>x!==it).map(x=>x.name));
       banner("削除しています…"); await commit(ch,"delete: "+it.name); banner("削除しました","ok"); await loadQueue();
+    }
+    if(a==="redraft"&&AK){
+      const memo=card.querySelector("textarea[id^=m-]").value.trim();
+      banner("AIが書庫から論文を選び、文章と写真の文字を作り直しています…");
+      const srcURL=it.source||it.src;
+      const ai=await aiPhoto(await toJpegDataURL(srcURL),memo);
+      const ch=await overlayChanges(it,ai.overlay);
+      ch["queue/"+it.stem+".caption.txt"]=textToB64(ai.caption+"\n");
+      if(memo) ch["queue/"+it.stem+".txt"]=textToB64(memo+"\n"); else if(it.hasMemo) ch["queue/"+it.stem+".txt"]=null;
+      await commit(ch,"redraft: "+it.name); banner(ai.overlay.matched===false?"作り直しました（書庫に合う論文は見つかりませんでした）":"作り直しました","ok"); await loadQueue();
+      return;
     }
     if(a==="redraft"){
       const memo=card.querySelector("textarea[id^=m-]").value.trim();
@@ -431,6 +467,7 @@ drop.ondragover=e=>{e.preventDefault();drop.classList.add("over")};
 drop.ondragleave=()=>drop.classList.remove("over");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");addFiles(e.dataTransfer.files)};
 $("#uploadBtn").onclick=()=>guard(async()=>{
+  if(AK&&$("#autoDraft").checked) return uploadWithAI();
   banner(`${pending.length}枚を追加しています…`);
   const d=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
   const ch={}, names=[];
@@ -486,6 +523,102 @@ async function loadHistory(){
   });
 }
 
+/* ---------- 写真＋論文の文字 ---------- */
+const localSource={};
+async function loadBitmap(url){const r=await fetch(url,{cache:"no-store"});if(!r.ok)throw new Error("画像を読み込めませんでした");return createImageBitmap(await r.blob(),{imageOrientation:"from-image"})}
+async function toJpegDataURL(url){
+  const bmp=await loadBitmap(url), s=Math.min(1,2048/Math.max(bmp.width,bmp.height));
+  const cv=document.createElement("canvas"); cv.width=Math.round(bmp.width*s); cv.height=Math.round(bmp.height*s);
+  cv.getContext("2d").drawImage(bmp,0,0,cv.width,cv.height); return cv.toDataURL("image/jpeg",0.9);
+}
+function libraryText(){
+  return papers.map((p,i)=>[`■P${i+1}『${p.title}』 出典表記：${citeOf(p)}`,p.limitations?`  研究の限界：${p.limitations}`:"",
+    ...p.findings.map(f=>`  P${i+1}-${f.id}: ${f.text}`)].filter(Boolean).join("\n")).join("\n").slice(0,80000);
+}
+function photoSys(){
+  const rules=(cfg.rules||[]).map(r=>"- "+r).join("\n");
+  return `あなたはInstagramの投稿担当です。写真に合う研究論文の知見を【論文の書庫】から選び、投稿文と、写真に重ねる短い文字を作ります。
+【アカウント】
+${cfg.account_profile||""}
+【文体】
+${cfg.tone||""}
+【厳守ルール】
+${rules}
+- まず写真とメモの内容を把握し、書庫から「その内容に直接関係する知見」を1〜3個選ぶ
+- 文章に使う研究の情報は、選んだ知見に書かれた内容だけ。数値や条件を変えない。書庫にない一般論・豆知識を足さない
+- 関係が薄い知見をこじつけない。明確に関係する知見が無ければ matched を false にし、overlay の文字は空にして、投稿文は写真とメモだけで書く
+- 研究結果を商品の効能・健康効果に結びつけない。「〜という研究があります」という紹介に留める
+- 写真やメモから読み取れない事実を作らない
+出力はJSONのみ：
+{"matched":true,"use":["P1-f2"],"overlay":{"headline":"写真に重ねる見出し（20字以内）","sub":"補足（40字以内）","cite":"使った論文の出典表記（書庫の表記どおり）"},
+"caption":"投稿文（${cfg.max_caption_chars||600}字以内。写真の話→論文の知見→研究の条件・限界。論文を使ったらハッシュタグの前に『出典：』の行。ハッシュタグは ${(cfg.fixed_hashtags||[]).join(" ")} を必ず含め3〜5個追加）"}`;
+}
+let papersLoaded=false;
+async function aiPhoto(dataURL,memo){
+  if(!cfg) await loadConfig();
+  if(!papersLoaded){await loadPapers();}
+  let user="この写真の投稿を作ってください。";
+  if(memo) user+=`\n\n【撮影者のメモ（事実はここに書かれたものだけを使う）】\n${memo}`;
+  user+=papers.length?`\n\n【論文の書庫】\n${libraryText()}`:"\n\n【論文の書庫】（まだ論文がありません。matched は false）";
+  const j=await claude([{type:"image",source:{type:"base64",media_type:"image/jpeg",data:dataURL.split(",")[1]}},{type:"text",text:user}],photoSys(),3000);
+  const o=j.overlay||{}, matched=j.matched!==false&&!!o.headline;
+  return {caption:String(j.caption||"").trim(),overlay:{on:matched,matched,headline:matched?String(o.headline||""):"",sub:matched?String(o.sub||""):"",cite:matched?String(o.cite||""):"",use:j.use||[]}};
+}
+/* 写真(4:5)に文字を重ねる */
+async function composePhoto(srcURL,ov){
+  const W=1080,H=1350, bmp=await loadBitmap(srcURL), cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"), sc=Math.max(W/bmp.width,H/bmp.height), dw=bmp.width*sc, dh=bmp.height*sc;
+  ctx.drawImage(bmp,(W-dw)/2,(H-dh)/2,dw,dh);
+  if(ov&&ov.on&&ov.headline){
+    await document.fonts.load(`700 56px ${CF}`); await document.fonts.load(`400 32px ${CF}`);
+    const P=72, maxW=W-2*P; ctx.textBaseline="top";
+    ctx.font=`700 56px ${CF}`; const hl=wrapText(ctx,ov.headline,maxW).slice(0,3);
+    ctx.font=`400 32px ${CF}`; const sl=ov.sub?wrapText(ctx,ov.sub,maxW).slice(0,3):[];
+    ctx.font=`400 22px ${CF}`; const cl=ov.cite?wrapText(ctx,"出典："+ov.cite,maxW).slice(0,2):[];
+    const textH=hl.length*76+(sl.length?18+sl.length*48:0)+(cl.length?22+cl.length*32:0);
+    const top=H-P-textH;
+    const g=ctx.createLinearGradient(0,top-220,0,H); g.addColorStop(0,"rgba(10,16,12,0)"); g.addColorStop(.45,"rgba(10,16,12,.62)"); g.addColorStop(1,"rgba(10,16,12,.86)");
+    ctx.fillStyle=g; ctx.fillRect(0,top-220,W,H-top+220);
+    let y=top; ctx.fillStyle=CARD.honey; ctx.fillRect(P,y-28,72,6);
+    ctx.fillStyle="#ffffff"; ctx.font=`700 56px ${CF}`; hl.forEach(l=>{ctx.fillText(l,P,y);y+=76});
+    if(sl.length){y+=18;ctx.font=`400 32px ${CF}`;ctx.fillStyle="rgba(255,255,255,.94)";sl.forEach(l=>{ctx.fillText(l,P,y);y+=48})}
+    if(cl.length){y+=22;ctx.font=`400 22px ${CF}`;ctx.fillStyle="rgba(255,255,255,.75)";cl.forEach(l=>{ctx.fillText(l,P,y);y+=32})}
+  }
+  return cv.toDataURL("image/jpeg",0.92);
+}
+/* 文字の変更 → 元写真から再合成した画像＋overlay.json の変更セット */
+async function overlayChanges(it,ov){
+  const ch={}; let src=it.source;
+  if(!src){ // 元写真が未保存なら、今の画像を元写真として保存
+    const d=await toJpegDataURL(it.src); ch["source/"+it.name]=d.split(",")[1]; localSource[it.name]=d; src=d;
+  }
+  const img=await composePhoto(src,ov);
+  ch["queue/"+it.name]=img.split(",")[1]; localPreview[it.name]=img;
+  ch["queue/"+it.stem+".overlay.json"]=textToB64(JSON.stringify(ov,null,2)+"\n");
+  return ch;
+}
+async function uploadWithAI(){
+  const d=new Date(Date.now()+9*3600e3).toISOString().replace(/[-:T]/g,"").slice(0,14);
+  const ch={}, names=[]; let nomatch=0;
+  for(let i=0;i<pending.length;i++){
+    banner(`AIが写真を見て、書庫から論文を選んでいます ${i+1}/${pending.length}…`);
+    const p=pending[i], name=`${d.slice(0,8)}_${d.slice(8)}_${String(i+1).padStart(2,"0")}.jpg`, stem=stemOf(name);
+    const src=await toJpegDataURL(p.url);
+    const ai=await aiPhoto(src,p.memo.trim()); if(ai.overlay.matched===false) nomatch++;
+    const img=await composePhoto(src,ai.overlay);
+    ch["source/"+name]=src.split(",")[1]; ch["queue/"+name]=img.split(",")[1];
+    ch["queue/"+stem+".overlay.json"]=textToB64(JSON.stringify(ai.overlay,null,2)+"\n");
+    ch["queue/"+stem+".caption.txt"]=textToB64(ai.caption+"\n");
+    if(p.memo.trim()) ch["queue/"+stem+".txt"]=textToB64(p.memo.trim()+"\n");
+    localSource[name]=src; localPreview[name]=img; names.push(name);
+  }
+  ch["queue/order.txt"]=orderB64([...items.map(x=>x.name),...names]);
+  banner("投稿待ちに追加しています…");
+  await commit(ch,`add: ${names.length}枚（論文の文字つき）`);
+  pending=[]; renderPending(); await loadQueue(); showTab("queue");
+  banner(`${names.length}枚を追加しました。`+(nomatch?`うち${nomatch}枚は書庫に合う論文が見つからず、写真とメモだけで書きました。`:"文字と投稿文を確認してください。"),"ok");
+}
+
 /* ---------- Papers: Claude (browser direct) ---------- */
 let AK=""; try{AK=localStorage.getItem("anthropicKey")||""}catch(e){}
 let papers=[]; let drafts=[];
@@ -516,7 +649,7 @@ async function loadPapers(){
   papers=(await Promise.all(list.filter(f=>f.name.endsWith(".json")).map(async f=>{
     try{const p=JSON.parse(await readText("papers/"+f.name));p._file=f.name;p.used=p.used||[];return p}catch(e){return null}
   }))).filter(Boolean).sort((a,b)=>(b.added||"").localeCompare(a.added||""));
-  renderPapers();
+  papersLoaded=true; renderPapers();
 }
 const citeOf=p=>[p.authors,p.year&&`(${p.year})`,p.journal].filter(Boolean).join(" ")+(p.doi?` doi:${p.doi}`:"");
 function renderPapers(){
